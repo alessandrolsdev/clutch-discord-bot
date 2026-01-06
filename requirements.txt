@@ -8,3 +8,5 @@ PyNaCl
 discord-ext-voice-recv
 streamlit
 requests
+aiohttp
+ffmpeg-python

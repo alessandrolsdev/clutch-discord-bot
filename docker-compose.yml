@@ -1,14 +1,36 @@
 services:
-  clutch-bot:
+  # --- AGENTE 01 ---
+  agente-01:
     build: .
-    container_name: clutch_bot_brain
-    restart: always
-    env_file: .env
+    container_name: clutch_spy_01
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN_1}
     ports:
       - "8080:8080"
       - "6001:6001/udp"
     volumes:
-      - ./data:/app/data
+      - ./cogs:/app/cogs
       - ./assets:/app/assets
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - ./data:/app/data
+    restart: always
+    dns: # <--- ADICIONE ISSO
+      - 8.8.8.8
+      - 8.8.4.4
+
+  # --- AGENTE 02 ---
+  agente-02:
+    build: .
+    container_name: clutch_spy_02
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN_2}
+    ports:
+      - "8081:8080"
+      - "6002:6001/udp"
+    volumes:
+      - ./cogs:/app/cogs
+      - ./assets:/app/assets
+      - ./data:/app/data
+    restart: always
+    dns: # <--- ADICIONE ISSO AQUI TAMBÉM
+      - 8.8.8.8
+      - 8.8.4.4
