@@ -1,0 +1,14 @@
+services:
+  clutch-bot:
+    build: .
+    container_name: clutch_bot_brain
+    restart: always
+    env_file: .env
+    ports:
+      - "8080:8080"
+      - "6001:6001/udp"
+    volumes:
+      - ./data:/app/data
+      - ./assets:/app/assets
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

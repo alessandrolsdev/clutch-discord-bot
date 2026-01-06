@@ -1,88 +1,92 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
 import google.generativeai as genai
 import os
+from collections import deque
+
+# ⚡ MODELO DE PONTA
+MODEL_NAME = "gemini-2.5-flash"
 
 class Cerebro(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.api_key = os.getenv("GEMINI_API_KEY")
-        
-        # Configura a IA
         if self.api_key:
             genai.configure(api_key=self.api_key)
-        else:
-            print("⚠️ AVISO: GEMINI_API_KEY não encontrada no .env")
         
-        # Dicionário de Personalidades
+        # Memória: Guarda as últimas 5 mensagens de cada usuário
+        self.historico = {}
+
         self.personas = {
-            "padrao": "Você é o Clutch, um assistente robótico útil, breve e levemente sarcástico.",
-            "coach": "Você é um Coach de crossfit intenso. GRITE (use Caps Lock), use gírias de academia, seja agressivo e motivador.",
-            "tio": "Você é o Tio do Pavê brasileiro. Faça trocadilhos ruins com tudo o que disserem. Ria alto (KKKKK).",
-            "hacker": "Você é um especialista em cibersegurança paranoico. Fale sobre IPs, firewalls, matrix e conspirações.",
-            "poeta": "Você é um poeta dramático do século 19. Fale com palavras difíceis e faça rimas."
+            "padrao": "Você é o Clutch. Responda de forma curta, inteligente e útil.",
+            "coach": "Você é um Coach motivacional intenso. USE CAPS LOCK e emojis de força 💪.",
+            "hacker": "Você é um especialista em Cybersegurança. Use termos técnicos e seja misterioso 🕶️.",
+            "fofoqueira": "Você é uma vizinha fofoqueira que sabe de tudo. Use gírias e 'menina do céu' 💅."
         }
         self.persona_atual = "padrao"
 
-    @commands.command()
-    async def incorporar(self, ctx, persona):
-        """Muda a personalidade da IA"""
-        persona = persona.lower()
-        if persona in self.personas:
-            self.persona_atual = persona
-            await ctx.send(f"🔄 Personalidade carregada: **{persona.upper()}**")
-        else:
-            opcoes = ", ".join(self.personas.keys())
-            await ctx.send(f"❌ Persona inválida. Opções: `{opcoes}`")
+    def get_historico(self, user_id):
+        if user_id not in self.historico:
+            self.historico[user_id] = deque(maxlen=5)
+        return self.historico[user_id]
 
-    @commands.command(aliases=['c'])
-    async def clutch(self, ctx, *, pergunta):
-        """Conversa com a IA e responde em áudio"""
-        if not self.api_key:
-            return await ctx.send("❌ Configure a API Key no .env")
-
-        # Prepara o prompt com a persona
-        instrucao = self.personas.get(self.persona_atual)
-        prompt_final = f"{instrucao}\n\nO usuário disse: '{pergunta}'\n(Responda de forma curta para ser falado em áudio, máximo 2 frases)."
-
-        async with ctx.typing():
-            try:
-                # Usando gemini-pro que é mais estável
-                model = genai.GenerativeModel('gemini-2.5-flash')
-                response = model.generate_content(prompt_final)
-                texto_resposta = response.text
-                
-                # Manda no chat
-                await ctx.send(f"🤖 **{self.persona_atual.capitalize()}:** {texto_resposta}")
-                
-                # Mágica: Chama o módulo de Áudio para falar
-                audio_cog = self.bot.get_cog('Audio')
-                if audio_cog:
-                    arquivo = await audio_cog.gerar_tts(texto_resposta)
-                    await audio_cog.tocar_arquivo(ctx, arquivo)
-                else:
-                    await ctx.send("⚠️ Módulo de áudio não encontrado para falar a resposta.")
-                    
-            except Exception as e:
-                await ctx.send(f"❌ Erro na IA: {e}")
-
-    @commands.command()
-    async def batalha(self, ctx, *, oponentes):
-        """Simula uma luta épica entre duas coisas"""
-        prompt = (f"Atue como um narrador de lutas do UFC muito empolgado. "
-                  f"Analise quem ganharia esta luta: '{oponentes}'. "
-                  f"Descreva o final da luta de forma resumida e dê o veredito do vencedor.")
+    @app_commands.command(name="persona", description="Muda a personalidade da IA")
+    @app_commands.choices(persona=[
+        app_commands.Choice(name="🤖 Padrão", value="padrao"),
+        app_commands.Choice(name="🏋️ Coach", value="coach"),
+        app_commands.Choice(name="🕶️ Hacker", value="hacker"),
+        app_commands.Choice(name="💅 Fofoqueira", value="fofoqueira")
+    ])
+    async def persona(self, interaction: discord.Interaction, persona: app_commands.Choice[str]):
+        self.persona_atual = persona.value
         
-        async with ctx.typing():
-            try:
-                model = genai.GenerativeModel('gemini-2.5-flash')
-                response = model.generate_content(prompt)
-                texto = response.text
-                
-                await ctx.send(f"🥊 **ARENA CLUTCH:**\n{texto}")
-            except Exception as e:
-                await ctx.send(f"❌ Erro na batalha: {e}")
+        embed = discord.Embed(
+            title="🔄 Personalidade Atualizada", 
+            description=f"Modo ativado: **{persona.name}**", 
+            color=discord.Color.green()
+        )
+        await interaction.response.send_message(embed=embed)
 
-# Função obrigatória para carregar o módulo
+    @app_commands.command(name="chat", description="Conversa contínua com a IA")
+    @app_commands.describe(mensagem="Sua mensagem para o bot")
+    async def chat(self, interaction: discord.Interaction, mensagem: str):
+        if not self.api_key: 
+            return await interaction.response.send_message("❌ API Key não configurada.", ephemeral=True)
+        
+        await interaction.response.defer()
+
+        # Constrói o histórico para a IA ter contexto
+        history = self.get_historico(interaction.user.id)
+        history_text = "\n".join(history)
+        
+        instrucao = self.personas.get(self.persona_atual)
+        prompt = f"{instrucao}\n\n[Histórico Recente]:\n{history_text}\n\n[Usuário]: {mensagem}\n(Responda de forma concisa)"
+
+        try:
+            model = genai.GenerativeModel(MODEL_NAME)
+            response = model.generate_content(prompt)
+            texto_resposta = response.text
+            
+            # Atualiza memória
+            history.append(f"User: {mensagem}")
+            history.append(f"Bot: {texto_resposta}")
+
+            # Embed Elegante
+            embed = discord.Embed(description=texto_resposta, color=discord.Color.blue())
+            embed.set_author(name=f"{self.persona_atual.capitalize()} Bot", icon_url=self.bot.user.display_avatar.url)
+            embed.set_footer(text=f"Modelo: {MODEL_NAME} • Pedido por {interaction.user.name}")
+            
+            await interaction.followup.send(embed=embed)
+            
+            # Integração com Áudio (se disponível)
+            audio_cog = self.bot.get_cog('Audio')
+            if audio_cog and interaction.guild.voice_client:
+                arquivo = await audio_cog.gerar_tts(texto_resposta)
+                await audio_cog.tocar_arquivo(interaction, arquivo)
+
+        except Exception as e:
+            await interaction.followup.send(f"❌ Erro de processamento: {e}")
+
 async def setup(bot):
     await bot.add_cog(Cerebro(bot))

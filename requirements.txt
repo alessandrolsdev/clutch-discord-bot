@@ -1,0 +1,10 @@
+discord.py
+python-dotenv
+google-generativeai
+yt-dlp
+edge-tts
+aiosqlite
+PyNaCl
+discord-ext-voice-recv
+streamlit
+requests

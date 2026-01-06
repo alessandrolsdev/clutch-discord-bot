@@ -1,8 +1,11 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
 import google.generativeai as genai
 import os
 import random
+
+MODEL_NAME = "gemini-2.5-flash"
 
 class Iconico(commands.Cog):
     def __init__(self, bot):
@@ -11,79 +14,60 @@ class Iconico(commands.Cog):
         if self.api_key:
             genai.configure(api_key=self.api_key)
 
-    # --- FUNÇÃO AUXILIAR DE IA ---
     async def gerar_texto(self, prompt):
         try:
-            model = genai.GenerativeModel('gemini-pro')
+            model = genai.GenerativeModel(MODEL_NAME)
             response = model.generate_content(prompt)
             return response.text
-        except Exception as e:
+        except Exception:
             return "Minha criatividade pifou. Tente de novo."
 
-    # --- 1. RPG DO SERVIDOR ---
-    @commands.command()
-    async def rpg(self, ctx, usuario: discord.Member = None):
-        """Cria uma ficha de RPG engraçada para o usuário"""
-        if not usuario: usuario = ctx.author
+    @app_commands.command(name="rpg", description="Gera uma ficha de RPG zueira")
+    async def rpg(self, interaction: discord.Interaction, usuario: discord.Member = None):
+        if not usuario: usuario = interaction.user
+        await interaction.response.defer()
 
-        prompt = (f"Crie uma ficha de personagem de RPG super engraçada e criativa para '{usuario.name}'. "
-                  f"Invente: Uma Classe bizarra (ex: Mago da Preguiça), Nível de Poder (número aleatório), "
-                  f"Uma Fraqueza ridícula e uma Habilidade Especial inútil ou caótica. "
-                  f"Use emojis. Seja breve e formate como uma lista.")
+        prompt = f"Crie uma ficha de RPG engraçada para {usuario.name}. Classe bizarra, Poder aleatório, Fraqueza ridícula. Use emojis e formate como lista."
+        texto = await self.gerar_texto(prompt)
+        
+        embed = discord.Embed(title=f"⚔️ Ficha: {usuario.name}", description=texto, color=discord.Color.red())
+        embed.set_thumbnail(url=usuario.display_avatar.url)
+        await interaction.followup.send(embed=embed)
 
-        async with ctx.typing():
-            texto = await self.gerar_texto(prompt)
+    @app_commands.command(name="vibe", description="Julga a vibe da call (com áudio!)")
+    async def vibe(self, interaction: discord.Interaction):
+        if not interaction.user.voice:
+            return await interaction.response.send_message("❌ Entre na call primeiro!", ephemeral=True)
             
-            # Monta o cartão visual
-            embed = discord.Embed(title=f"⚔️ Ficha: {usuario.name}", description=texto, color=discord.Color.red())
-            embed.set_thumbnail(url=usuario.display_avatar.url)
-            await ctx.send(embed=embed)
+        await interaction.response.defer()
+        
+        # Escolhe vítima aleatória
+        vitima = random.choice(interaction.user.voice.channel.members)
+        prompt = f"Julgue a vibe de {vitima.name} de forma ácida e engraçada (máx 2 frases)."
+        texto = await self.gerar_texto(prompt)
+        
+        embed = discord.Embed(description=f"🗣️ **{texto}**", color=discord.Color.magenta())
+        embed.set_author(name=f"Juiz de Vibe: {vitima.name}", icon_url=vitima.display_avatar.url)
+        await interaction.followup.send(embed=embed)
 
-    # --- 2. DETETIVE DE VIBE (Fala em Áudio!) ---
-    @commands.command()
-    async def vibe(self, ctx):
-        """Julga a vibe de alguém na call e FALTA MAL em áudio"""
-        if not ctx.author.voice:
-            return await ctx.send("❌ Entre numa call para eu sentir a vibe!")
+        # Fala em áudio
+        audio_cog = self.bot.get_cog('Audio')
+        if audio_cog:
+            if not interaction.guild.voice_client: 
+                await interaction.user.voice.channel.connect()
+            arquivo = await audio_cog.gerar_tts(texto)
+            await audio_cog.tocar_arquivo(interaction, arquivo)
 
-        # Escolhe uma vítima aleatória do canal de voz
-        membros = ctx.author.voice.channel.members
-        vitima = random.choice(membros)
+    @app_commands.command(name="shipp", description="Analisa compatibilidade de casal")
+    async def shipp(self, interaction: discord.Interaction, pessoa1: discord.Member, pessoa2: discord.Member = None):
+        if not pessoa2: pessoa2 = interaction.user
+        await interaction.response.defer()
 
-        prompt = (f"Aja como um juiz de 'Vibes' sarcástico e engraçado. "
-                  f"Analise a energia do usuário '{vitima.name}' hoje. "
-                  f"Dê um veredito curto (máximo 2 frases) dizendo se a vibe é boa, tóxica, de corno, de rico, etc. "
-                  f"Seja criativo e ácido.")
-
-        async with ctx.typing():
-            texto = await self.gerar_texto(prompt)
-            await ctx.send(f"🔮 **Lendo a aura de {vitima.mention}...**\n🗣️ _{texto}_")
-
-            # Manda o Áudio falar
-            audio_cog = self.bot.get_cog('Audio')
-            if audio_cog:
-                # Gera o áudio da zueira
-                arquivo = await audio_cog.gerar_tts(texto)
-                # Toca sem dó
-                await audio_cog.tocar_arquivo(ctx, arquivo)
-
-    # --- 3. SHIPPADOR TÓXICO ---
-    @commands.command()
-    async def shipp(self, ctx, user1: discord.Member, user2: discord.Member = None):
-        """Analisa o casal e diz se dá namoro ou BO"""
-        if not user2: user2 = ctx.author # Se marcar só um, shippa com quem chamou
-
-        prompt = (f"Aja como um cupido bêbado e sincero. Analise o casal '{user1.name}' e '{user2.name}'. "
-                  f"Dê uma nota de compatibilidade de 0 a 100%. "
-                  f"Explique o motivo da nota de forma engraçada (ex: eles combinam pq ambos são trouxas).")
-
-        async with ctx.typing():
-            texto = await self.gerar_texto(prompt)
-            
-            embed = discord.Embed(title=f"💘 Análise de Casal", description=texto, color=discord.Color.purple())
-            # Tenta colocar as duas fotos lado a lado (gambiarra visual)
-            embed.set_thumbnail(url="https://i.imgur.com/5bZ8u2i.png") # Coração pixel art
-            await ctx.send(f"{user1.mention} + {user2.mention}", embed=embed)
+        prompt = f"Aja como cupido. Calcule a compatibilidade entre {pessoa1.name} e {pessoa2.name}. Dê nota % e motivo engraçado."
+        texto = await self.gerar_texto(prompt)
+        
+        embed = discord.Embed(title="💘 Análise do Cupido", description=texto, color=discord.Color.pink())
+        await interaction.followup.send(f"{pessoa1.mention} + {pessoa2.mention}", embed=embed)
 
 async def setup(bot):
     await bot.add_cog(Iconico(bot))
