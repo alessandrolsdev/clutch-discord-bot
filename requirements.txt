@@ -1,12 +1,28 @@
-discord.py
-python-dotenv
-google-generativeai
-yt-dlp
-edge-tts
-aiosqlite
-PyNaCl
-discord-ext-voice-recv
-streamlit
-requests
-aiohttp
-ffmpeg-python
+# Dependências principais do bot Discord
+discord.py>=2.3.0
+python-dotenv>=1.0.0
+PyNaCl>=1.5.0
+
+# Integração com IA (Google Gemini)
+google-generativeai>=0.3.0
+
+# Funcionalidades de áudio
+yt-dlp>=2023.10.0
+edge-tts>=6.1.0
+pyaudio>=0.2.13
+ffmpeg-python>=0.2.0
+pedalboard>=0.7.0
+
+# Banco de dados
+aiosqlite>=0.19.0
+
+# Captura de áudio do Discord
+discord-ext-voice-recv>=0.4.0
+
+# Dashboard web (Streamlit)
+streamlit>=1.28.0
+requests>=2.31.0
+aiohttp>=3.9.0
+
+# Processamento numérico (usado no dashboard)
+numpy>=1.24.0

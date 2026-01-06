@@ -1,6 +1,44 @@
+# Python
 __pycache__/
 *.py[cod]
-.env
+*.pyc
+*.pyo
+*.pyd
+
+# Ambiente virtual
 venv/
+env/
+ENV/
+
+# Configurações sensíveis
+.env
+*.env
+
+# IDEs
 .vscode/
+.idea/
+*.swp
+*.swo
+
+# Arquivos de áudio temporários
 *.mp3
+*.wav
+*.ogg
+*.webm
+*.m4a
+
+# Dados e cache
+data/
+temp/
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+desktop.ini

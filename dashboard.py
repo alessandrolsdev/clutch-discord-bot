@@ -4,6 +4,7 @@ import threading
 import socket
 import pyaudio
 import time
+import numpy as np
 from streamlit.runtime.scriptrunner import add_script_run_ctx
 from pedalboard import Pedalboard, PitchShift, Reverb, Distortion, Delay, HighpassFilter
 from pedalboard.io import AudioFile
