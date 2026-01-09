@@ -156,7 +156,7 @@ Microfone (Windows)
 
 ### 1. Clone o Repositório
 ```bash
-git clone https://github.com/seu-usuario/clutch-discord-bot.git
+git clone https://github.com/alessandrolsdev/clutch-discord-bot.git
 cd clutch-discord-bot
 ```
 
@@ -209,7 +209,7 @@ UDP_PORT_RECEBIMENTO=6001
 Ao convidar o bot para seu servidor, use este link:
 
 ```
-https://discord.com/api/oauth2/authorize?client_id=SEU_CLIENT_ID&permissions=8&scope=bot%20applications.commands
+https://discord.com/oauth2/authorize?client_id=1441450379886727221&permissions=8&integration_type=0&scope=bot
 ```
 
 Permissões necessárias:
@@ -403,7 +403,7 @@ Contribuições são bem-vindas! Para contribuir:
 
 ## 📝 Licença
 
-Este projeto está sob a licença MIT. Veja o arquivo `LICENSE` para mais detalhes.
+Este projeto está sob a licença. Veja o arquivo `LICENSE` para mais detalhes.
 
 ---
 
@@ -411,8 +411,8 @@ Este projeto está sob a licença MIT. Veja o arquivo `LICENSE` para mais detalh
 
 **Clutch Development Team**
 
-- Discord: [Seu Discord]
-- GitHub: [@seu-usuario](https://github.com/seu-usuario)
+- Discord: [norbiom](https://discord.com/users/norbiom)
+- GitHub: [alessandrolsdev](https://github.com/alessandrolsdev)
 
 ---
 
@@ -420,7 +420,7 @@ Este projeto está sob a licença MIT. Veja o arquivo `LICENSE` para mais detalh
 
 - **Discord.py** - Framework do bot
 - **Google Gemini** - IA generativa
-- **yt-dlp** - Download de músicas
+- **yt-dlp** - Reprodução de músicas
 - **Streamlit** - Dashboard web
 - **Pedalboard (Spotify)** - Processamento de áudio profissional
 
