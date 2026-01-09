@@ -428,7 +428,7 @@ Este projeto está sob a licença. Veja o arquivo `LICENSE` para mais detalhes.
 
 <div align="center">
 
-Desenvolvido com ❤️ por [Clutch Team]
+Desenvolvido com ❤️ por alessandrolsdev
 
 [⬆ Voltar ao topo](#-clutch-discord-bot-v25)
 
