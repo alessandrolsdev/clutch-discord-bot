@@ -1,4 +1,4 @@
-# 🤖 Clutch Discord Bot V2.5
+# 🤖 Clutch Discord Bot V3.0
 
 <div align="center">
 
@@ -222,7 +222,44 @@ Permissões necessárias:
 
 ## 🚀 Uso
 
-### Iniciar o Bot
+### 🆕 Launcher Unificado (Recomendado)
+
+A partir da v3.0, use o **script de inicialização unificado** que gerencia todos os componentes:
+
+```bash
+python start.py
+```
+
+**Modos disponíveis:**
+
+```bash
+# Menu interativo (escolha os componentes)
+python start.py
+
+# Inicia tudo automaticamente
+python start.py --all
+
+# Apenas o bot Discord
+python start.py --bot-only
+
+# Modo desenvolvimento (mostra logs em tempo real)
+python start.py --dev
+```
+
+**O que o launcher faz:**
+- ✅ Verifica dependências (Python, FFmpeg, Docker, PyAudio)
+- ✅ Cria arquivo `.env` se não existir
+- ✅ Inicia componentes selecionados (Docker, Bot, Dashboard, Receptor, Microfone)
+- ✅ Monitora saúde dos processos
+- ✅ Shutdown gracioso com Ctrl+C
+
+---
+
+### 💾 Modo Manual (Avançado)
+
+Se preferir iniciar componentes individualmente:
+
+#### Iniciar o Bot
 ```bash
 python main.py
 ```
@@ -231,23 +268,28 @@ Saída esperada:
 ```
 ⚙️  Cog Carregado: audio.py
 ⚙️  Cog Carregado: cerebro.py
-⚙️  Cog Carregado: social.py
+⚙️  Cog Carregado: monitoring.py
 ...
 🌲 Slash Commands Sincronizados!
 ---
-✅ CLUTCH V2.5 ONLINE: ClutchBot
+✅ CLUTCH V3.0 ONLINE: ClutchBot
 💾 Banco de Dados SQL inicializado com sucesso!
 ---
 ```
 
-### Iniciar Dashboard (Opcional)
+#### Iniciar Dashboard (Opcional)
 ```bash
 streamlit run dashboard.py
 ```
 
-### Iniciar Receptor de Áudio (Opcional)
+#### Iniciar Receptor de Áudio (Opcional)
 ```bash
 python receptor.py
+```
+
+#### Iniciar Microfone (Opcional)
+```bash
+python microfone.py
 ```
 
 ---

@@ -16,8 +16,8 @@ pedalboard>=0.7.0
 # Banco de dados
 aiosqlite>=0.19.0
 
-# Captura de áudio do Discord
-discord-ext-voice-recv>=0.4.0
+# Captura de áudio do Discord (versão alpha mais recente)
+discord-ext-voice-recv>=0.5.0a167
 
 # Dashboard web (Streamlit)
 streamlit>=1.28.0
