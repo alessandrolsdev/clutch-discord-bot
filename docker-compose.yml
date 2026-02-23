@@ -13,7 +13,7 @@ services:
       - ./assets:/app/assets
       - ./data:/app/data
     restart: always
-    dns: # <--- ADICIONE ISSO
+    dns: 
       - 8.8.8.8
       - 8.8.4.4
 
@@ -31,6 +31,6 @@ services:
       - ./assets:/app/assets
       - ./data:/app/data
     restart: always
-    dns: # <--- ADICIONE ISSO AQUI TAMBÉM
+    dns: 
       - 8.8.8.8
       - 8.8.4.4
