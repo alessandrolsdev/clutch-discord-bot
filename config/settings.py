@@ -52,6 +52,14 @@ def get_env(key: str, default: Optional[str] = None, required: bool = False) -> 
     return value
 
 
+def get_optional_int_env(key: str) -> Optional[int]:
+    """Obtém uma variável opcional convertendo para inteiro."""
+    value = os.getenv(key)
+    if value in (None, ""):
+        return None
+    return int(value)
+
+
 @dataclass
 class BotConfig:
     """Configurações do bot Discord"""
@@ -190,6 +198,38 @@ class APIConfig:
 
 
 @dataclass
+class PresenceBridgeConfig:
+    """Configurações da bridge de presence para o CLUTCH."""
+
+    api_base_url: Optional[str] = field(
+        default_factory=lambda: get_env("CLUTCH_API_BASE_URL")
+    )
+
+    ingest_token: Optional[str] = field(
+        default_factory=lambda: get_env("CLUTCH_DISCORD_INGEST_TOKEN")
+    )
+
+    target_guild_id: Optional[int] = field(
+        default_factory=lambda: get_optional_int_env("CLUTCH_TARGET_GUILD_ID")
+    )
+
+    dry_run: bool = field(
+        default_factory=lambda: get_env("CLUTCH_PRESENCE_DRY_RUN", "true").lower()
+        == "true"
+    )
+
+    dedup_seconds: int = field(
+        default_factory=lambda: int(get_env("CLUTCH_PRESENCE_DEDUP_SECONDS", "15"))
+    )
+
+    request_timeout_seconds: float = field(
+        default_factory=lambda: float(
+            get_env("CLUTCH_PRESENCE_REQUEST_TIMEOUT_SECONDS", "5")
+        )
+    )
+
+
+@dataclass
 class GamificationConfig:
     """Configurações do sistema de gamificação"""
 
@@ -284,6 +324,9 @@ class Settings:
     ai: AIConfig = field(default_factory=AIConfig)
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     api: APIConfig = field(default_factory=APIConfig)
+    presence_bridge: PresenceBridgeConfig = field(
+        default_factory=PresenceBridgeConfig
+    )
     gamification: GamificationConfig = field(default_factory=GamificationConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
@@ -330,6 +373,12 @@ class Settings:
 
         print(f"\n[API]")
         print(f"  Endpoint: http://{self.api.host}:{self.api.port}")
+
+        print(f"\n[PRESENCE BRIDGE]")
+        print(f"  Dry-run: {'✅ Sim' if self.presence_bridge.dry_run else '❌ Não'}")
+        print(
+            f"  CLUTCH Base URL: {self.presence_bridge.api_base_url or 'Não configurado'}"
+        )
 
         print(f"\n[LOGGING]")
         print(f"  Level: {self.logging.level}")
