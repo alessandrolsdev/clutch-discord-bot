@@ -43,6 +43,7 @@ intents = discord.Intents.default()
 intents.message_content = True  # Ler conteúdo de mensagens (para comandos e XP)
 intents.members = True  # Rastrear entrada/saída de membros
 intents.voice_states = True  # Detectar quando membros entram/saem de canais de voz
+intents.presences = True  # Receber status/activity em tempo real dos membros
 
 
 class ClutchBot(commands.Bot):
