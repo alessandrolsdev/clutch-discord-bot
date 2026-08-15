@@ -2,28 +2,34 @@
 CLUTCH BOT - DASHBOARD PREMIUM V3.0
 ====================================
 
-Interface de controle visual premium com design moderno nível Awwwards.
+Interface de controle visual do bot.
 
-Recursos:
-- 🎨 Glassmorphism e gradientes modernos
-- 🎭 16 efeitos de voz profissionais
-- 📊 Visualizador de áudio em tempo real
-- 🎛️ Controles de volume individual
-- 🔊 Soundboard integrado
-- 📡 Status em tempo real
-- ⚡ Animações fluidas
+Correções desta versão:
+- Envia o header ``X-API-Key`` em todas as chamadas (a API agora autentica).
+- Os sliders de volume realmente chamam ``POST /volume``; antes só mudavam um
+  valor local que nunca saía do navegador.
+- O soundboard usa a lista real de sons vinda de ``GET /status`` e dispara
+  ``POST /play`` (antes era um placeholder "em desenvolvimento").
+- Removido o ``time.sleep(2) + st.rerun()`` no fim do script, que criava um
+  loop de recarga infinito consumindo CPU e reiniciando a página o tempo todo.
+- A thread do microfone não lê mais ``st.session_state`` (proibido fora do
+  script principal); ela é controlada por um objeto compartilhado com Event.
+- ``aplicar_efeito`` desintercalava os canais de forma errada
+  (``reshape(2, -1)`` em áudio intercalado), o que embaralhava o estéreo.
 
-Autor: Clutch Development Team
-Versão: 3.0 Premium
+Uso:
+    streamlit run dashboard.py
 """
 
-import streamlit as st
-import requests
-import threading
+import os
 import socket
+import threading
 import time
+from typing import Optional
+
 import numpy as np
-from streamlit.runtime.scriptrunner import add_script_run_ctx
+import requests
+import streamlit as st
 
 # Importações condicionais (PyAudio é opcional)
 try:
@@ -62,7 +68,7 @@ st.set_page_config(
 )
 
 # ============================================================================
-# ESTILOS CSS PREMIUM (Nível Awwwards)
+# ESTILOS CSS PREMIUM
 # ============================================================================
 
 st.markdown(
@@ -400,7 +406,6 @@ VOICE_EFFECTS = {
         "icon": "🎤",
         "name": "Normal",
         "description": "Sem processamento",
-        "color": "#E8E8F0",
     },
     "Robot": {
         "icon": "🤖",
@@ -439,7 +444,7 @@ VOICE_EFFECTS = {
     },
     "Female": {
         "icon": "👧",
-        "name": "Voz Feminina",
+        "name": "Voz Aguda",
         "description": "Tom mais agudo",
         "pedalboard": lambda: [PitchShift(semitones=4)],
     },
@@ -534,114 +539,231 @@ VOICE_EFFECTS = {
 }
 
 # ============================================================================
-# ESTADO DA SESSÃO
+# CONFIGURAÇÃO DE ÁUDIO E REDE
 # ============================================================================
 
-if "transmitting" not in st.session_state:
-    st.session_state.transmitting = False
+SAMPLE_RATE = 48000
+CHANNELS = 2
+CHUNK = 960  # 20ms — mesmo frame do Discord
 
-if "current_effect" not in st.session_state:
-    st.session_state.current_effect = "Normal"
+# Configuração por agente (sobrescrevível por variáveis de ambiente)
+AGENTES = {
+    "Alpha": {
+        "api_url": os.getenv("CLUTCH_API_URL_ALPHA", "http://127.0.0.1:8080"),
+        "api_key": os.getenv("API_KEY_1", os.getenv("API_KEY", "")),
+        "udp_port": int(os.getenv("UDP_PORT_ALPHA", "6001")),
+    },
+    "Bravo": {
+        "api_url": os.getenv("CLUTCH_API_URL_BRAVO", "http://127.0.0.1:8081"),
+        "api_key": os.getenv("API_KEY_2", os.getenv("API_KEY", "")),
+        "udp_port": int(os.getenv("UDP_PORT_BRAVO", "6002")),
+    },
+}
 
-if "volume_mic" not in st.session_state:
-    st.session_state.volume_mic = 0.7
+UDP_IP = os.getenv("UDP_TARGET_IP", "127.0.0.1")
 
-if "volume_fx" not in st.session_state:
-    st.session_state.volume_fx = 1.0
-
-if "agent" not in st.session_state:
-    st.session_state.agent = "Alpha"
-
-# ============================================================================
-# CONFIGURAÇÕES DE AGENTE
-# ============================================================================
-
-if st.session_state.agent == "Alpha":
-    API_URL = "http://localhost:8080"
-    UDP_PORT = 6001
-    THEME_COLOR = "#00D9FF"
-else:
-    API_URL = "http://localhost:8081"
-    UDP_PORT = 6002
-    THEME_COLOR = "#FF006E"
-
-UDP_IP = "127.0.0.1"
 
 # ============================================================================
 # PROCESSAMENTO DE ÁUDIO
 # ============================================================================
 
 
-def aplicar_efeito(data_bytes, efeito_nome):
-    """Aplica efeito de voz ao áudio"""
+def aplicar_efeito(data_bytes: bytes, efeito_nome: str) -> bytes:
+    """
+    Aplica um efeito de voz a um bloco de PCM 16-bit estéreo intercalado.
+
+    Args:
+        data_bytes: Áudio bruto do microfone
+        efeito_nome: Chave em VOICE_EFFECTS
+
+    Returns:
+        Áudio processado (ou o original se o efeito não se aplica)
+    """
     if not PEDALBOARD_AVAILABLE or efeito_nome == "Normal":
         return data_bytes
 
-    try:
-        # Converte bytes para float32
-        audio_int16 = np.frombuffer(data_bytes, dtype=np.int16)
-        audio_float32 = audio_int16.astype(np.float32) / 32768.0
-        audio_input = audio_float32.reshape(2, -1)
-
-        # Cria pedalboard com efeito
-        effect_config = VOICE_EFFECTS.get(efeito_nome, {})
-        if "pedalboard" in effect_config:
-            board = Pedalboard(effect_config["pedalboard"]())
-            processed = board(audio_input, 48000)
-
-            # Converte de volta para int16
-            processed = np.clip(processed, -1.0, 1.0)
-            audio_output = (processed * 32767.0).astype(np.int16)
-            audio_output = audio_output.flatten("F")
-            return audio_output.tobytes()
-    except Exception as e:
-        print(f"Erro ao aplicar efeito: {e}")
-
-    return data_bytes
-
-
-def thread_mic():
-    """Thread de captura do microfone"""
-    if not PYAUDIO_AVAILABLE:
-        return
-
-    p = pyaudio.PyAudio()
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    CHUNK = 960
+    efeito = VOICE_EFFECTS.get(efeito_nome, {})
+    if "pedalboard" not in efeito:
+        return data_bytes
 
     try:
-        stream = p.open(
-            format=pyaudio.paInt16,
-            channels=2,
-            rate=48000,
-            input=True,
-            frames_per_buffer=CHUNK,
-        )
+        # int16 intercalado -> float32 por canal, formato (canais, amostras)
+        amostras = np.frombuffer(data_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+        if amostras.size % CHANNELS:
+            amostras = amostras[: amostras.size - (amostras.size % CHANNELS)]
 
-        while st.session_state.transmitting:
-            try:
-                raw_data = stream.read(CHUNK, exception_on_overflow=False)
-                processed_data = aplicar_efeito(
-                    raw_data, st.session_state.current_effect
-                )
-                sock.sendto(processed_data, (UDP_IP, UDP_PORT))
-            except:
-                pass
-    except:
-        pass
-    finally:
-        stream.stop_stream()
-        stream.close()
-        p.terminate()
-        sock.close()
+        entrada = amostras.reshape(-1, CHANNELS).T
+
+        board = Pedalboard(efeito["pedalboard"]())
+        processado = np.clip(board(entrada, SAMPLE_RATE), -1.0, 1.0)
+
+        # Volta para int16 intercalado
+        saida = (processado * 32767.0).astype(np.int16).T.reshape(-1)
+        return saida.tobytes()
+    except Exception as e:  # noqa: BLE001 - efeito não deve derrubar a captura
+        print(f"Erro ao aplicar efeito {efeito_nome}: {e}")
+        return data_bytes
+
+
+class MicController:
+    """
+    Controla a thread de captura do microfone.
+
+    A thread não pode ler ``st.session_state`` (Streamlit só permite isso no
+    script principal), então efeito e destino ficam neste objeto compartilhado.
+    """
+
+    def __init__(self) -> None:
+        self._thread: Optional[threading.Thread] = None
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self.effect = "Normal"
+        self.target = (UDP_IP, 6001)
+        self.last_error: Optional[str] = None
+
+    def is_running(self) -> bool:
+        """True se a captura está ativa."""
+        return self._thread is not None and self._thread.is_alive()
+
+    def set_effect(self, effect: str) -> None:
+        """Troca o efeito aplicado em tempo real."""
+        with self._lock:
+            self.effect = effect
+
+    def _current_effect(self) -> str:
+        with self._lock:
+            return self.effect
+
+    def start(self, host: str, port: int, effect: str) -> None:
+        """Inicia a captura enviando para host:port via UDP."""
+        if self.is_running():
+            return
+
+        self.target = (host, port)
+        self.last_error = None
+        self.set_effect(effect)
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        """Para a captura e aguarda a thread encerrar."""
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=2)
+        self._thread = None
+
+    def _run(self) -> None:
+        """Loop de captura (executa na thread)."""
+        if not PYAUDIO_AVAILABLE:
+            self.last_error = "PyAudio não instalado"
+            return
+
+        audio = pyaudio.PyAudio()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        stream = None
+
+        try:
+            stream = audio.open(
+                format=pyaudio.paInt16,
+                channels=CHANNELS,
+                rate=SAMPLE_RATE,
+                input=True,
+                frames_per_buffer=CHUNK,
+            )
+
+            while not self._stop.is_set():
+                raw = stream.read(CHUNK, exception_on_overflow=False)
+                sock.sendto(aplicar_efeito(raw, self._current_effect()), self.target)
+
+        except Exception as e:  # noqa: BLE001 - reporta na UI em vez de morrer calado
+            self.last_error = str(e)
+            print(f"Erro na captura do microfone: {e}")
+        finally:
+            # stream pode ser None se p.open() falhou — o código antigo
+            # levantava NameError aqui e escondia o erro real.
+            if stream is not None:
+                try:
+                    stream.stop_stream()
+                    stream.close()
+                except Exception:
+                    pass
+            audio.terminate()
+            sock.close()
+
+
+@st.cache_resource
+def get_mic_controller() -> MicController:
+    """Singleton do controlador de microfone (sobrevive aos reruns)."""
+    return MicController()
+
+
+mic = get_mic_controller()
 
 
 # ============================================================================
-# HEADER E LAYOUT PRINCIPAL
+# CLIENTE DA API
+# ============================================================================
+
+
+def api_headers(agente: str) -> dict:
+    """Header de autenticação da API para o agente selecionado."""
+    chave = AGENTES[agente]["api_key"]
+    return {"X-API-Key": chave} if chave else {}
+
+
+def api_get(agente: str, rota: str, timeout: float = 1.5):
+    """GET na API do agente. Retorna None em caso de falha."""
+    try:
+        resposta = requests.get(
+            f"{AGENTES[agente]['api_url']}{rota}",
+            headers=api_headers(agente),
+            timeout=timeout,
+        )
+        if resposta.status_code == 401:
+            st.session_state.api_error = "API_KEY inválida ou ausente"
+            return None
+        resposta.raise_for_status()
+        return resposta.json()
+    except requests.RequestException:
+        return None
+
+
+def api_post(agente: str, rota: str, payload: Optional[dict] = None, timeout: float = 5.0):
+    """POST na API do agente. Retorna None em caso de falha."""
+    try:
+        resposta = requests.post(
+            f"{AGENTES[agente]['api_url']}{rota}",
+            json=payload or {},
+            headers=api_headers(agente),
+            timeout=timeout,
+        )
+        if resposta.status_code == 401:
+            st.session_state.api_error = "API_KEY inválida ou ausente"
+            return None
+        resposta.raise_for_status()
+        return resposta.json()
+    except requests.RequestException as e:
+        st.session_state.api_error = str(e)
+        return None
+
+
+# ============================================================================
+# ESTADO DA SESSÃO
+# ============================================================================
+
+st.session_state.setdefault("current_effect", "Normal")
+st.session_state.setdefault("volume_mic", 0.7)
+st.session_state.setdefault("volume_fx", 1.0)
+st.session_state.setdefault("agent", "Alpha")
+st.session_state.setdefault("api_error", None)
+
+# ============================================================================
+# HEADER
 # ============================================================================
 
 st.markdown(
-    f"""
+    """
 <div class="main-header">
     <h1>🎛️ Clutch Control Center</h1>
     <p>Interface Premium de Controle de Áudio v3.0</p>
@@ -650,264 +772,222 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# ============================================================================
 # SIDEBAR
+# ============================================================================
+
 with st.sidebar:
     st.markdown("### 👤 Agente")
-    agente_selecionado = st.radio(
-        "Selecione o agente:",
-        ["Alpha", "Bravo"],
-        index=0 if st.session_state.agent == "Alpha" else 1,
-        key="agent_selector",
-    )
-    st.session_state.agent = agente_selecionado
+    # O widget escreve direto em st.session_state["agent"]: antes a URL da API
+    # era calculada antes da seleção, ficando sempre um rerun atrasada.
+    st.radio("Selecione o agente:", list(AGENTES), key="agent", horizontal=True)
 
-    st.markdown("---")
+agente = st.session_state.agent
+config_agente = AGENTES[agente]
+API_URL = config_agente["api_url"]
+UDP_PORT = config_agente["udp_port"]
 
-    # Status da API
-    try:
-        r = requests.get(f"{API_URL}/status", timeout=0.5).json()
-        bot_status = "ONLINE"
-        canal_atual = r.get("channel", "Desconectado")
-    except:
-        bot_status = "OFFLINE"
-        canal_atual = "---"
+status = api_get(agente, "/status")
+bot_online = status is not None
+canal_atual = status.get("channel", "---") if status else "---"
+sons_disponiveis = status.get("sounds", []) if status else []
+membros = status.get("members", []) if status else []
 
-    status_class = "status-online" if bot_status == "ONLINE" else "status-offline"
+with st.sidebar:
+    status_class = "status-online" if bot_online else "status-offline"
     st.markdown(
-        f'<div class="glass-card"><div class="status-badge {status_class}">● {bot_status}</div></div>',
+        f'<div class="glass-card"><div class="status-badge {status_class}">● '
+        f'{"ONLINE" if bot_online else "OFFLINE"}</div></div>',
         unsafe_allow_html=True,
     )
-
     st.markdown(f"**Canal:** {canal_atual}")
 
-    st.markdown("---")
+    if not config_agente["api_key"]:
+        st.caption("⚠️ Sem API_KEY definida — só funciona se o bot estiver em loopback.")
 
+    if st.session_state.api_error:
+        st.error(st.session_state.api_error)
+        st.session_state.api_error = None
+
+    st.markdown("---")
     st.markdown("### 📡 Conexão")
     channel_id = st.text_input("ID do Canal de Voz", key="channel_id_input")
 
     col1, col2 = st.columns(2)
     with col1:
         if st.button("🔗 Conectar", use_container_width=True):
-            if channel_id:
-                try:
-                    requests.post(
-                        f"{API_URL}/connect", json={"channel_id": channel_id}, timeout=2
-                    )
-                    st.success("Conectando...")
-                    time.sleep(1)
+            if not channel_id.strip().isdigit():
+                st.error("Informe um ID numérico de canal.")
+            else:
+                resultado = api_post(agente, "/connect", {"channel_id": channel_id.strip()})
+                if resultado:
+                    st.success(resultado.get("message", "Conectando..."))
                     st.rerun()
-                except:
-                    st.error("Erro ao conectar")
 
     with col2:
         if st.button("❌ Desconectar", use_container_width=True):
-            try:
-                requests.post(f"{API_URL}/disconnect", timeout=2)
+            if api_post(agente, "/disconnect"):
+                mic.stop()
                 st.success("Desconectado")
-                time.sleep(1)
                 st.rerun()
-            except:
-                pass
 
     st.markdown("---")
-
-    # Volumes
     st.markdown("### 🎚️ Volumes")
-    st.session_state.volume_mic = st.slider(
-        "🎤 Microfone", 0.0, 1.0, st.session_state.volume_mic, 0.1
-    )
-    st.session_state.volume_fx = st.slider(
-        "🔊 Efeitos", 0.0, 1.0, st.session_state.volume_fx, 0.1
-    )
 
+    volume_mic = st.slider("🎤 Microfone", 0.0, 1.0, st.session_state.volume_mic, 0.05)
+    volume_fx = st.slider("🔊 Efeitos", 0.0, 1.0, st.session_state.volume_fx, 0.05)
+
+    # Os sliders agora chegam ao bot: antes o valor só existia no navegador.
+    if (volume_mic, volume_fx) != (
+        st.session_state.volume_mic,
+        st.session_state.volume_fx,
+    ):
+        st.session_state.volume_mic = volume_mic
+        st.session_state.volume_fx = volume_fx
+        if api_post(agente, "/volume", {"mic": volume_mic, "fx": volume_fx}):
+            st.toast("Volume atualizado no bot")
+
+    st.markdown("---")
+    if st.button("🔄 Atualizar status", use_container_width=True):
+        st.rerun()
+    auto_refresh = st.checkbox("Auto-atualizar (5s)", value=False)
+
+# ============================================================================
 # ÁREA PRINCIPAL
+# ============================================================================
+
 tab_effects, tab_soundboard, tab_status = st.tabs(
     ["🎭 Efeitos de Voz", "🎵 Soundboard", "📊 Status"]
 )
 
 with tab_effects:
-    # Controles de microfone
     col_mic1, col_mic2 = st.columns([1, 2])
 
     with col_mic1:
-        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
         st.markdown("### 🎙️ Transmissão")
 
-        if st.session_state.transmitting:
-            status_badge = (
-                '<div class="status-badge status-transmitting">🔴 TRANSMITINDO</div>'
+        if mic.is_running():
+            st.markdown(
+                '<div class="status-badge status-transmitting">🔴 TRANSMITINDO</div>',
+                unsafe_allow_html=True,
             )
-            st.markdown(status_badge, unsafe_allow_html=True)
-
             if st.button("⏹️ Parar", use_container_width=True, type="primary"):
-                st.session_state.transmitting = False
+                mic.stop()
                 st.rerun()
         else:
-            status_badge = '<div class="status-badge status-online">🟢 PRONTO</div>'
-            st.markdown(status_badge, unsafe_allow_html=True)
-
+            st.markdown(
+                '<div class="status-badge status-online">🟢 PRONTO</div>',
+                unsafe_allow_html=True,
+            )
             if PYAUDIO_AVAILABLE:
-                if st.button(
-                    "▶️ Ativar Microfone", use_container_width=True, type="primary"
-                ):
-                    st.session_state.transmitting = True
-                    t = threading.Thread(target=thread_mic, daemon=True)
-                    add_script_run_ctx(t)
-                    t.start()
+                if st.button("▶️ Ativar Microfone", use_container_width=True, type="primary"):
+                    mic.start(UDP_IP, UDP_PORT, st.session_state.current_effect)
+                    time.sleep(0.3)  # dá tempo da thread reportar erro de device
                     st.rerun()
             else:
-                st.warning("⚠️ PyAudio não instalado")
+                st.warning("⚠️ PyAudio não instalado (pip install -r requirements-dashboard.txt)")
 
-        st.markdown("</div>", unsafe_allow_html=True)
+        if mic.last_error:
+            st.error(f"Microfone: {mic.last_error}")
 
     with col_mic2:
-        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-        st.markdown("### 📊 Visualizador de Áudio")
-        # Simulador de visualizador (você pode integrar com dados reais)
-        bars_html = '<div class="visualizer-container">'
-        for i in range(20):
-            height = np.random.randint(20, 100)
-            bars_html += (
-                f'<div class="visualizer-bar" style="height: {height}px;"></div>'
-            )
-        bars_html += "</div>"
-        st.markdown(bars_html, unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("### 👥 Na Call")
+        if membros:
+            for membro in membros:
+                marcador = "🗣️" if membro.get("speaking") else "🔇" if membro.get("muted") else "😐"
+                st.markdown(f"{marcador} **{membro.get('name', '?')}**")
+        else:
+            st.caption("Ninguém na call (ou bot desconectado).")
 
-    # Grid de efeitos
     st.markdown("### 🎭 Selecione o Efeito de Voz")
 
     cols = st.columns(4)
-    effects_list = list(VOICE_EFFECTS.keys())
-
-    for idx, effect_key in enumerate(effects_list):
-        effect = VOICE_EFFECTS[effect_key]
-        col_idx = idx % 4
-
-        with cols[col_idx]:
-            active_class = (
-                "active" if st.session_state.current_effect == effect_key else ""
-            )
-
+    for idx, chave in enumerate(VOICE_EFFECTS):
+        efeito = VOICE_EFFECTS[chave]
+        ativo = "✅ " if st.session_state.current_effect == chave else ""
+        with cols[idx % 4]:
             if st.button(
-                f"{effect['icon']}\n{effect['name']}",
-                key=f"effect_{effect_key}",
+                f"{ativo}{efeito['icon']} {efeito['name']}",
+                key=f"effect_{chave}",
                 use_container_width=True,
-                help=effect.get("description", ""),
+                help=efeito.get("description", ""),
             ):
-                st.session_state.current_effect = effect_key
+                st.session_state.current_effect = chave
+                mic.set_effect(chave)  # aplica na thread já em execução
                 st.rerun()
 
+    if not PEDALBOARD_AVAILABLE:
+        st.info("ℹ️ Pedalboard não instalado — os efeitos ficam desativados.")
+
 with tab_soundboard:
-    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     st.markdown("### 🎵 Soundboard")
-    st.info("🚧 Soundboard em desenvolvimento - Em breve!")
 
-    # Exemplo de layout futuro
-    sound_cols = st.columns(3)
-    example_sounds = [
-        "🔔 Alarme",
-        "📢 Buzina",
-        "🎉 Comemoração",
-        "😂 Risada",
-        "👏 Palmas",
-        "💥 Explosão",
-    ]
-
-    for idx, sound in enumerate(example_sounds):
-        with sound_cols[idx % 3]:
-            if st.button(sound, use_container_width=True):
-                st.toast(f"Som {sound} em breve!")
-
-    st.markdown("</div>", unsafe_allow_html=True)
+    if not bot_online:
+        st.warning("Bot offline — não é possível listar os sons.")
+    elif not sons_disponiveis:
+        st.info(
+            "Nenhum som encontrado. Coloque arquivos .mp3 em `assets/sfx/` "
+            "(ou no diretório definido em `SOUNDS_DIR`)."
+        )
+    else:
+        sound_cols = st.columns(3)
+        for idx, som in enumerate(sons_disponiveis):
+            with sound_cols[idx % 3]:
+                if st.button(f"🔊 {som}", key=f"som_{som}", use_container_width=True):
+                    resultado = api_post(agente, "/play", {"filename": som})
+                    if resultado:
+                        st.toast(resultado.get("message", "Tocando"))
 
 with tab_status:
     st.markdown("### 📊 Status do Sistema")
 
     metric_cols = st.columns(4)
+    metricas = [
+        ("Bot Status", "ONLINE" if bot_online else "OFFLINE"),
+        ("Efeito Atual", VOICE_EFFECTS[st.session_state.current_effect]["name"]),
+        ("Microfone", "ON" if mic.is_running() else "OFF"),
+        ("Agente", agente),
+    ]
 
-    with metric_cols[0]:
-        st.markdown(
-            """
-        <div class="metric-card">
-            <div class="metric-value">{}</div>
-            <div class="metric-label">Bot Status</div>
-        </div>
-        """.format(
-                bot_status
-            ),
-            unsafe_allow_html=True,
-        )
-
-    with metric_cols[1]:
-        st.markdown(
-            """
-        <div class="metric-card">
-            <div class="metric-value">{}</div>
-            <div class="metric-label">Efeito Atual</div>
-        </div>
-        """.format(
-                VOICE_EFFECTS[st.session_state.current_effect]["name"]
-            ),
-            unsafe_allow_html=True,
-        )
-
-    with metric_cols[2]:
-        mic_status = "ON" if st.session_state.transmitting else "OFF"
-        st.markdown(
-            """
-        <div class="metric-card">
-            <div class="metric-value">{}</div>
-            <div class="metric-label">Microfone</div>
-        </div>
-        """.format(
-                mic_status
-            ),
-            unsafe_allow_html=True,
-        )
-
-    with metric_cols[3]:
-        st.markdown(
-            """
-        <div class="metric-card">
-            <div class="metric-value">{}</div>
-            <div class="metric-label">Agente</div>
-        </div>
-        """.format(
-                st.session_state.agent
-            ),
-            unsafe_allow_html=True,
-        )
+    for coluna, (rotulo, valor) in zip(metric_cols, metricas):
+        with coluna:
+            st.markdown(
+                f'<div class="metric-card"><div class="metric-value">{valor}</div>'
+                f'<div class="metric-label">{rotulo}</div></div>',
+                unsafe_allow_html=True,
+            )
 
     st.markdown("---")
-
-    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     st.markdown("### 🔧 Informações Técnicas")
 
     tech_col1, tech_col2 = st.columns(2)
-
     with tech_col1:
         st.markdown(
             f"""
-        **API Endpoint:** `{API_URL}`  
-        **UDP Port:** `{UDP_PORT}`  
-        **Sample Rate:** `48000 Hz`  
-        **Channels:** `2 (Stereo)`
+        **API Endpoint:** `{API_URL}`
+        **API Key:** {'✅ definida' if config_agente['api_key'] else '❌ ausente'}
+        **UDP Port:** `{UDP_PORT}`
+        **Sample Rate:** `{SAMPLE_RATE} Hz`
+        **Channels:** `{CHANNELS} (Stereo)`
         """
         )
 
     with tech_col2:
         st.markdown(
             f"""
-        **PyAudio:** {'✅ Instalado' if PYAUDIO_AVAILABLE else '❌ Não instalado'}  
-        **Pedalboard:** {'✅ Instalado' if PEDALBOARD_AVAILABLE else '❌ Não instalado'}  
-        **Volume Mic:** `{int(st.session_state.volume_mic * 100)}%`  
+        **PyAudio:** {'✅ Instalado' if PYAUDIO_AVAILABLE else '❌ Não instalado'}
+        **Pedalboard:** {'✅ Instalado' if PEDALBOARD_AVAILABLE else '❌ Não instalado'}
+        **Volume Mic:** `{int(st.session_state.volume_mic * 100)}%`
         **Volume FX:** `{int(st.session_state.volume_fx * 100)}%`
         """
         )
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    if status:
+        with st.expander("Resposta bruta de /status"):
+            st.json(status)
 
-# Auto-refresh a cada 2 segundos
-time.sleep(2)
-st.rerun()
+# Auto-refresh opcional. O script antigo terminava com sleep(2)+rerun
+# incondicional, criando um loop infinito de recargas.
+if auto_refresh:
+    time.sleep(5)
+    st.rerun()

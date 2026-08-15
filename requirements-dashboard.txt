@@ -1,0 +1,23 @@
+# ============================================================
+# Dependências do DASHBOARD e dos utilitários de áudio locais
+# (dashboard.py, microfone.py, receptor.py)
+#
+# Ficam separadas porque pyaudio exige a lib nativa portaudio, que não
+# existe na imagem do bot — instalá-la lá quebrava o `docker build`.
+#
+# Linux:   sudo apt install portaudio19-dev
+# macOS:   brew install portaudio
+# Windows: pip install pipwin && pipwin install pyaudio
+# ============================================================
+
+-r requirements.txt
+
+# Interface web
+streamlit>=1.28.0
+requests>=2.31.0
+
+# Captura/reprodução local de áudio
+pyaudio>=0.2.14
+
+# Efeitos de voz em tempo real
+pedalboard>=0.7.0

@@ -20,6 +20,7 @@ Versão: 3.0
 """
 
 import os
+import shlex
 import sys
 import subprocess
 import time
@@ -82,16 +83,36 @@ class ClutchLauncher:
         # Define componentes disponíveis
         self._setup_components()
 
+    @staticmethod
+    def _docker_compose_cmd() -> List[str]:
+        """
+        Descobre qual CLI do Compose existe na máquina.
+
+        O binário ``docker-compose`` (v1) foi descontinuado; instalações atuais
+        expõem o subcomando ``docker compose`` (v2).
+        """
+        for candidato in (["docker", "compose"], ["docker-compose"]):
+            try:
+                resultado = subprocess.run(
+                    candidato + ["version"], capture_output=True, timeout=10
+                )
+                if resultado.returncode == 0:
+                    return candidato
+            except (OSError, subprocess.SubprocessError):
+                continue
+        return ["docker", "compose"]
+
     def _setup_components(self):
         """Configura todos os componentes do sistema"""
 
-        # Determina executável Python correto
-        python_exe = "python" if self.is_windows else "python3"
+        # sys.executable garante o mesmo interpretador/venv em qualquer SO
+        python_exe = sys.executable or ("python" if self.is_windows else "python3")
+        self.compose_cmd = self._docker_compose_cmd()
 
         self.components = {
             "docker": Component(
                 name="Docker Compose",
-                command=["docker-compose", "up", "-d"],
+                command=self.compose_cmd + ["up", "-d"],
                 description="Containers dos agentes de espionagem",
                 required=False,
                 port=8080,
@@ -117,7 +138,7 @@ class ClutchLauncher:
             ),
             "dashboard": Component(
                 name="Dashboard Web",
-                command=["streamlit", "run", "dashboard.py"],
+                command=[python_exe, "-m", "streamlit", "run", "dashboard.py"],
                 description="Interface web de controle",
                 required=False,
                 port=8501,
@@ -143,10 +164,10 @@ class ClutchLauncher:
         print(f"\n{Color.BOLD}🔍 Verificando dependências...{Color.ENDC}\n")
 
         dependencies = {
-            "Python": ["python", "--version"],
+            "Python": [sys.executable, "--version"],
             "FFmpeg": ["ffmpeg", "-version"],
             "Docker": ["docker", "--version"],
-            "Docker Compose": ["docker-compose", "--version"],
+            "Docker Compose": self.compose_cmd + ["version"],
         }
 
         all_ok = True
@@ -158,8 +179,8 @@ class ClutchLauncher:
                     version = result.stdout.split("\n")[0]
                     print(f"  ✅ {name}: {Color.GREEN}{version}{Color.ENDC}")
                 else:
-                    raise Exception()
-            except:
+                    raise RuntimeError(f"{name} retornou código {result.returncode}")
+            except (OSError, subprocess.SubprocessError, RuntimeError):
                 if name in ["Docker", "Docker Compose"]:
                     print(
                         f"  ⚠️  {name}: {Color.YELLOW}Não encontrado (opcional){Color.ENDC}"
@@ -190,7 +211,7 @@ class ClutchLauncher:
 
             if env_example.exists():
                 response = input(
-                    f"   Deseja criar .env a partir de .env.example? (s/n): "
+                    "   Deseja criar .env a partir de .env.example? (s/n): "
                 )
                 if response.lower() == "s":
                     shutil.copy(env_example, env_path)
@@ -199,15 +220,13 @@ class ClutchLauncher:
                         f"   {Color.YELLOW}⚠️  ATENÇÃO: Configure seus tokens no arquivo .env{Color.ENDC}\n"
                     )
 
-                    # Abre o arquivo no editor padrão
-                    if self.is_windows:
-                        os.system(f'notepad "{env_path}"')
-                    else:
-                        os.system(
-                            f'nano "{env_path}" || vim "{env_path}" || vi "{env_path}"'
-                        )
+                    # Abre o arquivo no editor padrão, se houver um disponível
+                    self._abrir_editor(env_path)
 
-                    return True
+                    print(
+                        f"   {Color.CYAN}Edite {env_path} e rode o launcher de novo.{Color.ENDC}\n"
+                    )
+                    return False
                 else:
                     print(
                         f"   {Color.RED}❌ Não é possível iniciar sem .env{Color.ENDC}\n"
@@ -219,16 +238,45 @@ class ClutchLauncher:
                 )
                 return False
 
-        # Verifica se TOKEN está configurado
+        # Verifica se TOKEN está configurado.
+        # O check antigo procurava "seu_token_aqui", mas o placeholder real do
+        # .env.example é "seu_token_discord_aqui" — nunca detectava nada.
+        valores = {}
         with open(env_path, "r", encoding="utf-8") as f:
-            content = f.read()
-            if "seu_token_aqui" in content or "DISCORD_TOKEN=" not in content:
-                print(
-                    f"   {Color.YELLOW}⚠️  DISCORD_TOKEN parece não estar configurado{Color.ENDC}\n"
-                )
-                return False
+            for linha in f:
+                linha = linha.strip()
+                if not linha or linha.startswith("#") or "=" not in linha:
+                    continue
+                chave, _, valor = linha.partition("=")
+                valores[chave.strip()] = valor.strip().strip("\"'")
+
+        token = valores.get("DISCORD_TOKEN", "")
+        if not token or token.startswith("seu_") or token.endswith("_aqui"):
+            print(
+                f"   {Color.YELLOW}⚠️  DISCORD_TOKEN não está configurado em .env{Color.ENDC}\n"
+            )
+            return False
 
         return True
+
+    def _abrir_editor(self, caminho: Path) -> None:
+        """Abre um editor de texto no arquivo indicado (best-effort)."""
+        if self.is_windows:
+            editores = [["notepad"]]
+        else:
+            editor_env = os.environ.get("EDITOR")
+            editores = ([shlex.split(editor_env)] if editor_env else []) + [
+                ["nano"],
+                ["vim"],
+                ["vi"],
+            ]
+
+        for editor in editores:
+            if shutil.which(editor[0]):
+                subprocess.call(editor + [str(caminho)])
+                return
+
+        print(f"   {Color.YELLOW}Nenhum editor encontrado. Edite {caminho} manualmente.{Color.ENDC}")
 
     def start_component(self, component: Component) -> bool:
         """Inicia um componente individual"""
@@ -240,9 +288,9 @@ class ClutchLauncher:
         try:
             # Ajusta comando para Docker
             if component.name == "Docker Compose":
-                # Para nas portas específicas primeiro se já estiver rodando
+                # Derruba containers antigos antes de subir novamente
                 subprocess.run(
-                    ["docker-compose", "down"], capture_output=True, timeout=10
+                    self.compose_cmd + ["down"], capture_output=True, timeout=30
                 )
 
             # Inicia o processo
@@ -289,13 +337,13 @@ class ClutchLauncher:
 
     def stop_component(self, component: Component):
         """Para um componente individual"""
-        if component.process:
+        if component.process or component.name == "Docker Compose":
             print(f"  🛑 Parando {component.name}...", end=" ")
 
             try:
                 if component.name == "Docker Compose":
-                    subprocess.run(["docker-compose", "down"], timeout=10)
-                else:
+                    subprocess.run(self.compose_cmd + ["down"], timeout=30)
+                elif component.process:
                     component.process.terminate()
                     component.process.wait(timeout=5)
 
@@ -303,9 +351,13 @@ class ClutchLauncher:
                 print(f"{Color.GREEN}OK{Color.ENDC}")
             except subprocess.TimeoutExpired:
                 print(f"{Color.YELLOW}FORÇANDO...{Color.ENDC}", end=" ")
-                component.process.kill()
+                if component.process:
+                    component.process.kill()
                 component.status = ComponentStatus.STOPPED
                 print(f"{Color.GREEN}OK{Color.ENDC}")
+            except OSError as e:
+                component.status = ComponentStatus.ERROR
+                print(f"{Color.RED}ERRO: {e}{Color.ENDC}")
 
     def start_all(self, components_to_start: List[str]):
         """Inicia componentes selecionados"""

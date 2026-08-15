@@ -27,7 +27,7 @@ import asyncio
 import psutil
 import time
 from typing import Optional, Dict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from utils.logger import get_logger
 from config.settings import settings
@@ -44,7 +44,7 @@ class ComponentHealth:
         self.is_healthy = False
         self.latency_ms: Optional[float] = None
         self.error_message: Optional[str] = None
-        self.last_check = datetime.utcnow()
+        self.last_check = datetime.now(timezone.utc)
 
     def __repr__(self):
         status = "🟢" if self.is_healthy else "🔴"
@@ -58,15 +58,16 @@ class Monitoring(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.start_time = datetime.utcnow()
+        self.start_time = datetime.now(timezone.utc)
         self.health_data: Dict[str, ComponentHealth] = {}
 
-        # Inicia loop de monitoramento
+    async def cog_load(self):
+        """Inicia o loop de monitoramento quando o cog é carregado."""
+        # Iniciar em __init__ dispara o loop antes do bot existir de fato.
         self.health_check_loop.start()
-
         logger.info("🏥 Sistema de monitoring inicializado")
 
-    def cog_unload(self):
+    async def cog_unload(self):
         """Para loops ao descarregar cog"""
         self.health_check_loop.cancel()
 
@@ -116,13 +117,22 @@ class Monitoring(commands.Cog):
         health = ComponentHealth("API HTTP")
 
         try:
-            url = f"http://localhost:{settings.api.port}/status"
+            host = settings.api.host
+            # 0.0.0.0 é endereço de bind, não de destino
+            if host in ("0.0.0.0", "::"):
+                host = "127.0.0.1"
+            url = f"http://{host}:{settings.api.port}/status"
+
+            # A API exige X-API-Key quando configurada
+            headers = (
+                {"X-API-Key": settings.api.api_key} if settings.api.api_key else {}
+            )
 
             start = time.time()
 
             async with aiohttp.ClientSession() as session:
                 async with session.get(
-                    url, timeout=aiohttp.ClientTimeout(total=5)
+                    url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)
                 ) as resp:
                     if resp.status == 200:
                         health.is_healthy = True
@@ -149,7 +159,7 @@ class Monitoring(commands.Cog):
                 "cpu_percent": process.cpu_percent(interval=0.1),
                 "memory_mb": process.memory_info().rss / 1024 / 1024,
                 "threads": process.num_threads(),
-                "uptime_seconds": (datetime.utcnow() - self.start_time).total_seconds(),
+                "uptime_seconds": (datetime.now(timezone.utc) - self.start_time).total_seconds(),
             }
         except Exception as e:
             logger.error(f"Erro ao obter recursos do sistema: {e}")
@@ -211,7 +221,7 @@ class Monitoring(commands.Cog):
                 if all(c.is_healthy for c in checks)
                 else discord.Color.red()
             ),
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
         )
 
         # Adiciona status de cada componente
@@ -293,7 +303,7 @@ class Monitoring(commands.Cog):
     )
     async def uptime(self, interaction: discord.Interaction):
         """Mostra tempo desde que o bot foi iniciado"""
-        uptime = datetime.utcnow() - self.start_time
+        uptime = datetime.now(timezone.utc) - self.start_time
 
         # Formata uptime
         days = uptime.days

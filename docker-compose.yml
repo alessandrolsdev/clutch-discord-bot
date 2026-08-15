@@ -1,19 +1,33 @@
+# Variáveis lidas do arquivo .env na raiz do projeto:
+#   DISCORD_TOKEN_1 / DISCORD_TOKEN_2 - tokens de cada agente
+#   API_KEY_1 / API_KEY_2             - chaves da API de controle (obrigatórias)
+#
+# As portas são publicadas apenas em 127.0.0.1: a API controla o bot
+# (entra em call, envia mensagens), então não deve ficar exposta na rede local.
+
 services:
   # --- AGENTE 01 ---
   agente-01:
     build: .
     container_name: clutch_spy_01
     environment:
-      - DISCORD_TOKEN=${DISCORD_TOKEN_1}
+      - DISCORD_TOKEN=${DISCORD_TOKEN_1:?defina DISCORD_TOKEN_1 no .env}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      # Dentro do container precisa ser 0.0.0.0 para a porta publicada
+      # funcionar; a autenticação por API_KEY é o que protege o endpoint.
+      - API_HOST=0.0.0.0
+      - API_KEY=${API_KEY_1:?defina API_KEY_1 no .env}
+      - DB_PATH=data/clutch.db
     ports:
-      - "8080:8080"
-      - "6001:6001/udp"
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:6001:6001/udp"
     volumes:
-      - ./cogs:/app/cogs
+      # Cada agente tem seu próprio banco: compartilhar o mesmo arquivo
+      # fazia os dois bots contabilizarem XP em cima do mesmo registro.
+      - ./data/agente-01:/app/data
       - ./assets:/app/assets
-      - ./data:/app/data
     restart: always
-    dns: 
+    dns:
       - 8.8.8.8
       - 8.8.4.4
 
@@ -22,15 +36,18 @@ services:
     build: .
     container_name: clutch_spy_02
     environment:
-      - DISCORD_TOKEN=${DISCORD_TOKEN_2}
+      - DISCORD_TOKEN=${DISCORD_TOKEN_2:?defina DISCORD_TOKEN_2 no .env}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - API_HOST=0.0.0.0
+      - API_KEY=${API_KEY_2:?defina API_KEY_2 no .env}
+      - DB_PATH=data/clutch.db
     ports:
-      - "8081:8080"
-      - "6002:6001/udp"
+      - "127.0.0.1:8081:8080"
+      - "127.0.0.1:6002:6001/udp"
     volumes:
-      - ./cogs:/app/cogs
+      - ./data/agente-02:/app/data
       - ./assets:/app/assets
-      - ./data:/app/data
     restart: always
-    dns: 
+    dns:
       - 8.8.8.8
       - 8.8.4.4

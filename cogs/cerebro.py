@@ -1,92 +1,147 @@
+"""
+COG: CÉREBRO (CHAT COM IA)
+==========================
+
+Chat contextual com o Google Gemini.
+
+Notas de implementação:
+- A persona é guardada **por servidor**, não globalmente: antes, qualquer
+  usuário trocando a persona afetava todos os servidores ao mesmo tempo.
+- O histórico é por (servidor, usuário) e limitado, evitando vazar conversa de
+  um usuário no contexto de outro.
+- As chamadas ao Gemini rodam fora do event loop (ver utils/ai.py).
+"""
+
+from collections import defaultdict, deque
+from typing import Deque, Dict, Tuple
+
 import discord
 from discord import app_commands
 from discord.ext import commands
-import google.generativeai as genai
-import os
-from collections import deque
 
-# ⚡ MODELO DE PONTA
-MODEL_NAME = "gemini-2.5-flash"
+from config.settings import settings
+from utils.ai import gemini
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+PERSONAS: Dict[str, str] = {
+    "padrao": "Você é o Clutch. Responda de forma curta, inteligente e útil.",
+    "coach": "Você é um Coach motivacional intenso. USE CAPS LOCK e emojis de força 💪.",
+    "hacker": "Você é um especialista em Cybersegurança. Use termos técnicos e seja misterioso 🕶️.",
+    "fofoqueira": "Você é uma vizinha fofoqueira que sabe de tudo. Use gírias e 'menina do céu' 💅.",
+}
+
 
 class Cerebro(commands.Cog):
-    def __init__(self, bot):
+    """Cog de conversa com IA."""
+
+    def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.api_key = os.getenv("GEMINI_API_KEY")
-        if self.api_key:
-            genai.configure(api_key=self.api_key)
-        
-        # Memória: Guarda as últimas 5 mensagens de cada usuário
-        self.historico = {}
+        # (guild_id, user_id) -> últimas trocas de mensagem
+        self.historico: Dict[Tuple[int, int], Deque[str]] = defaultdict(
+            lambda: deque(maxlen=settings.ai.history_size * 2)
+        )
+        # guild_id -> persona ativa naquele servidor
+        self.persona_por_guild: Dict[int, str] = defaultdict(lambda: "padrao")
 
-        self.personas = {
-            "padrao": "Você é o Clutch. Responda de forma curta, inteligente e útil.",
-            "coach": "Você é um Coach motivacional intenso. USE CAPS LOCK e emojis de força 💪.",
-            "hacker": "Você é um especialista em Cybersegurança. Use termos técnicos e seja misterioso 🕶️.",
-            "fofoqueira": "Você é uma vizinha fofoqueira que sabe de tudo. Use gírias e 'menina do céu' 💅."
-        }
-        self.persona_atual = "padrao"
+    def _chave(self, interaction: discord.Interaction) -> Tuple[int, int]:
+        """Chave de histórico isolada por servidor e usuário."""
+        guild_id = interaction.guild.id if interaction.guild else 0
+        return (guild_id, interaction.user.id)
 
-    def get_historico(self, user_id):
-        if user_id not in self.historico:
-            self.historico[user_id] = deque(maxlen=5)
-        return self.historico[user_id]
+    def _persona(self, interaction: discord.Interaction) -> str:
+        """Persona ativa no contexto atual."""
+        guild_id = interaction.guild.id if interaction.guild else 0
+        return self.persona_por_guild[guild_id]
 
     @app_commands.command(name="persona", description="Muda a personalidade da IA")
-    @app_commands.choices(persona=[
-        app_commands.Choice(name="🤖 Padrão", value="padrao"),
-        app_commands.Choice(name="🏋️ Coach", value="coach"),
-        app_commands.Choice(name="🕶️ Hacker", value="hacker"),
-        app_commands.Choice(name="💅 Fofoqueira", value="fofoqueira")
-    ])
-    async def persona(self, interaction: discord.Interaction, persona: app_commands.Choice[str]):
-        self.persona_atual = persona.value
-        
+    @app_commands.choices(
+        persona=[
+            app_commands.Choice(name="🤖 Padrão", value="padrao"),
+            app_commands.Choice(name="🏋️ Coach", value="coach"),
+            app_commands.Choice(name="🕶️ Hacker", value="hacker"),
+            app_commands.Choice(name="💅 Fofoqueira", value="fofoqueira"),
+        ]
+    )
+    async def persona(
+        self, interaction: discord.Interaction, persona: app_commands.Choice[str]
+    ):
+        """Troca a persona da IA neste servidor."""
+        guild_id = interaction.guild.id if interaction.guild else 0
+        self.persona_por_guild[guild_id] = persona.value
+
         embed = discord.Embed(
-            title="🔄 Personalidade Atualizada", 
-            description=f"Modo ativado: **{persona.name}**", 
-            color=discord.Color.green()
+            title="🔄 Personalidade Atualizada",
+            description=f"Modo ativado: **{persona.name}**",
+            color=discord.Color.green(),
         )
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="chat", description="Conversa contínua com a IA")
     @app_commands.describe(mensagem="Sua mensagem para o bot")
     async def chat(self, interaction: discord.Interaction, mensagem: str):
-        if not self.api_key: 
-            return await interaction.response.send_message("❌ API Key não configurada.", ephemeral=True)
-        
+        """Conversa com a IA mantendo contexto recente."""
+        if not gemini.is_enabled:
+            return await interaction.response.send_message(
+                "❌ IA não configurada (defina GEMINI_API_KEY).", ephemeral=True
+            )
+
+        mensagem = mensagem.strip()
+        if not mensagem:
+            return await interaction.response.send_message(
+                "❌ Mande alguma coisa para eu responder.", ephemeral=True
+            )
+
         await interaction.response.defer()
 
-        # Constrói o histórico para a IA ter contexto
-        history = self.get_historico(interaction.user.id)
-        history_text = "\n".join(history)
-        
-        instrucao = self.personas.get(self.persona_atual)
-        prompt = f"{instrucao}\n\n[Histórico Recente]:\n{history_text}\n\n[Usuário]: {mensagem}\n(Responda de forma concisa)"
+        historico = self.historico[self._chave(interaction)]
+        instrucao = PERSONAS[self._persona(interaction)]
+        prompt = (
+            f"{instrucao}\n\n"
+            f"[Histórico Recente]:\n{chr(10).join(historico)}\n\n"
+            f"[Usuário]: {mensagem}\n(Responda de forma concisa)"
+        )
 
-        try:
-            model = genai.GenerativeModel(MODEL_NAME)
-            response = model.generate_content(prompt)
-            texto_resposta = response.text
-            
-            # Atualiza memória
-            history.append(f"User: {mensagem}")
-            history.append(f"Bot: {texto_resposta}")
+        texto_resposta = await gemini.gerar(prompt)
+        if not texto_resposta:
+            return await interaction.followup.send(
+                "❌ Não consegui responder agora. Tente de novo em instantes."
+            )
 
-            # Embed Elegante
-            embed = discord.Embed(description=texto_resposta, color=discord.Color.blue())
-            embed.set_author(name=f"{self.persona_atual.capitalize()} Bot", icon_url=self.bot.user.display_avatar.url)
-            embed.set_footer(text=f"Modelo: {MODEL_NAME} • Pedido por {interaction.user.name}")
-            
-            await interaction.followup.send(embed=embed)
-            
-            # Integração com Áudio (se disponível)
-            audio_cog = self.bot.get_cog('Audio')
-            if audio_cog and interaction.guild.voice_client:
-                arquivo = await audio_cog.gerar_tts(texto_resposta)
-                await audio_cog.tocar_arquivo(interaction, arquivo)
+        # Atualiza memória só quando houve resposta de verdade
+        historico.append(f"User: {mensagem}")
+        historico.append(f"Bot: {texto_resposta}")
 
-        except Exception as e:
-            await interaction.followup.send(f"❌ Erro de processamento: {e}")
+        embed = discord.Embed(
+            description=texto_resposta, color=discord.Color.blue()
+        )
+        embed.set_author(
+            name=f"{self._persona(interaction).capitalize()} Bot",
+            icon_url=self.bot.user.display_avatar.url,
+        )
+        embed.set_footer(
+            text=f"Modelo: {gemini.model_name} • Pedido por {interaction.user.display_name}"
+        )
 
-async def setup(bot):
+        await interaction.followup.send(embed=embed)
+
+        # Integração com Áudio: só fala se o bot já estiver numa call
+        audio_cog = self.bot.get_cog("Audio")
+        if audio_cog and interaction.guild and interaction.guild.voice_client:
+            try:
+                await audio_cog.falar(interaction.guild, texto_resposta)
+            except Exception as e:
+                logger.warning("Falha ao reproduzir TTS da resposta: %s", e)
+
+    @app_commands.command(name="esquecer", description="Limpa sua conversa com a IA")
+    async def esquecer(self, interaction: discord.Interaction):
+        """Apaga o histórico de conversa do usuário neste servidor."""
+        self.historico.pop(self._chave(interaction), None)
+        await interaction.response.send_message(
+            "🧹 Memória limpa! Começamos do zero.", ephemeral=True
+        )
+
+
+async def setup(bot: commands.Bot):
     await bot.add_cog(Cerebro(bot))

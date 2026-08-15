@@ -1,0 +1,38 @@
+# Segredos - NUNCA devem entrar na imagem
+.env
+*.env
+!.env.example
+
+# Dados de usuários e estado local
+data/
+temp/
+logs/
+*.db
+*.sqlite
+*.sqlite3
+
+# Git e CI
+.git/
+.github/
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+env/
+ENV/
+
+# Componentes que não rodam dentro do container do bot
+dashboard.py
+microfone.py
+receptor.py
+start.py
+tests/
+spy-module/
+
+# IDEs / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

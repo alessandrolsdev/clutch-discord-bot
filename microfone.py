@@ -1,49 +1,78 @@
+"""
+MICROFONE (TRANSMISSOR UDP)
+===========================
+
+Captura o microfone local e envia via UDP para o bot injetar no canal de voz.
+
+Correções:
+- O bloco ``finally`` usava ``stream`` mesmo quando ``p.open()`` falhava,
+  levantando ``NameError`` e escondendo o erro real.
+- ``KeyboardInterrupt`` não era capturado dentro do laço interno, então o
+  Ctrl+C podia ser engolido pelo ``except OSError``.
+- Configuração agora vem do .env, em vez de constantes fixas.
+
+Uso:
+    python microfone.py
+"""
+
+import os
 import socket
+
 import pyaudio
 
-# Configurações
-UDP_IP = "127.0.0.1" # Manda para o Docker local
-UDP_PORT = 6001      # Porta nova que abrimos
+# Configurações de rede
+UDP_IP = os.getenv("UDP_TARGET_IP", "127.0.0.1")
+UDP_PORT = int(os.getenv("UDP_PORT_RECEBIMENTO", "6001"))
 
-# Configuração de Áudio (Idêntica ao Discord)
+# Configuração de áudio (idêntica ao Discord)
 FORMAT = pyaudio.paInt16
-CHANNELS = 2
-RATE = 48000
-CHUNK = 960 # 20ms exatos
+CHANNELS = int(os.getenv("AUDIO_CHANNELS", "2"))
+RATE = int(os.getenv("AUDIO_SAMPLE_RATE", "48000"))
+CHUNK = int(os.getenv("AUDIO_CHUNK_SIZE", "960"))  # 20ms exatos
 
-def iniciar_transmissao():
-    print(f"🎙️ MICROFONE ATIVO -> Enviando para {UDP_IP}:{UDP_PORT}")
+
+def iniciar_transmissao() -> None:
+    """Lê o microfone e transmite os frames PCM via UDP."""
+    print(f"🎙️ MICROFONE ATIVO -> enviando para {UDP_IP}:{UDP_PORT}")
     print("Fale para transmitir (Ctrl+C para parar)")
 
     p = pyaudio.PyAudio()
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    stream = None
 
     try:
-        stream = p.open(format=FORMAT, 
-                        channels=CHANNELS, 
-                        rate=RATE, 
-                        input=True, # Modo Entrada
-                        frames_per_buffer=CHUNK)
+        stream = p.open(
+            format=FORMAT,
+            channels=CHANNELS,
+            rate=RATE,
+            input=True,  # Modo entrada
+            frames_per_buffer=CHUNK,
+        )
 
         while True:
             try:
-                # 1. Lê do microfone
-                data = stream.read(CHUNK)
-                # 2. Joga na rede
+                # exception_on_overflow=False evita derrubar a captura quando
+                # o buffer do sistema estoura
+                data = stream.read(CHUNK, exception_on_overflow=False)
                 sock.sendto(data, (UDP_IP, UDP_PORT))
-            except OSError:
-                # Ignora buffer overflow do mic
-                pass
-            
+            except OSError as e:
+                print(f"⚠️ Falha de leitura/envio: {e}")
+
     except KeyboardInterrupt:
-        print("\nCâmbio desligo.")
+        print("\n📻 Câmbio, desligo.")
     except Exception as e:
-        print(f"Erro: {e}")
+        print(f"❌ Erro: {e}")
     finally:
-        stream.stop_stream()
-        stream.close()
+        # stream pode ser None se p.open() falhou
+        if stream is not None:
+            try:
+                stream.stop_stream()
+                stream.close()
+            except Exception:
+                pass
         p.terminate()
         sock.close()
+
 
 if __name__ == "__main__":
     iniciar_transmissao()

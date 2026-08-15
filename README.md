@@ -73,7 +73,7 @@ Bot Discord avançado com **Inteligência Artificial**, **Sistema de Áudio em T
 │                                  │
 │  ┌─────────┐  ┌─────────────┐  │
 │  │  Cogs   │  │  Database   │  │
-│  │ (9 mods)│  │  (SQLite)   │  │
+│  │(11 mods)│  │  (SQLite)   │  │
 │  └─────────┘  └─────────────┘  │
 └────────┬─────────────────────────┘
          │
@@ -119,21 +119,26 @@ Microfone (Windows)
 
 ### Software Necessário
 
-1. **Python 3.8+**
+1. **Python 3.10+**
    - Download: https://www.python.org/downloads/
    - ⚠️ Marque "Add Python to PATH" durante instalação
+   - No Python 3.13+ o módulo `audioop` foi removido; o bot usa `numpy` como
+     fallback automático (já está em `requirements.txt`).
 
 2. **FFmpeg** (para processamento de áudio)
    - Windows: https://www.geeksforgeeks.org/how-to-install-ffmpeg-on-windows/
    - Linux: `sudo apt install ffmpeg`
    - Mac: `brew install ffmpeg`
 
-3. **PyAudio** (requer instalação manual no Windows)
+3. **PyAudio** — necessário apenas para dashboard/microfone/receptor,
+   **não** para o bot. Exige a lib nativa `portaudio`:
    ```bash
-   # Windows: Baixe o wheel apropriado
-   # https://www.lfd.uci.edu/~gohlke/pythonlibs/#pyaudio
-   # Exemplo para Python 3.11 64-bit:
-   pip install PyAudio-0.2.13-cp311-cp311-win_amd64.whl
+   # Linux
+   sudo apt install portaudio19-dev && pip install pyaudio
+   # macOS
+   brew install portaudio && pip install pyaudio
+   # Windows
+   pip install pipwin && pipwin install pyaudio
    ```
 
 ### Contas e Tokens
@@ -146,8 +151,8 @@ Microfone (Windows)
      - ✅ Server Members Intent
      - ✅ Message Content Intent
 
-2. **Google Gemini API Key**
-   - Acesse: https://makersuite.google.com/app/apikey
+2. **Google Gemini API Key** (opcional — sem ela os comandos de IA ficam desativados)
+   - Acesse: https://aistudio.google.com/app/apikey
    - Crie uma API Key gratuita
 
 ---
@@ -172,17 +177,30 @@ source venv/bin/activate
 ```
 
 ### 3. Instale Dependências
+
+As dependências são separadas: a lista do bot não inclui `pyaudio`
+(que exige `portaudio` nativo e quebrava o `docker build`).
+
 ```bash
+# Só o bot (é o que a imagem Docker usa)
 pip install -r requirements.txt
+
+# Bot + dashboard + microfone/receptor
+pip install -r requirements-dashboard.txt
 ```
 
 ### 4. Configure o Ambiente
 ```bash
-# Copie o arquivo de exemplo
-copy .env.example .env
+# Windows
+copy .env.example .env && notepad .env
 
-# Edite .env com seus tokens
-notepad .env
+# Linux/Mac
+cp .env.example .env && ${EDITOR:-nano} .env
+```
+
+### 5. Rode os Testes (opcional)
+```bash
+python -m unittest discover -s tests -t .
 ```
 
 ---
@@ -191,17 +209,33 @@ notepad .env
 
 ### Arquivo `.env`
 
+`.env.example` lista todas as variáveis com comentários. O mínimo é:
+
 ```env
-# Token do Bot Discord
-DISCORD_TOKEN=seu_token_aqui
+# Token do Bot Discord (obrigatório)
+DISCORD_TOKEN=
 
-# API Key do Google Gemini
-GEMINI_API_KEY=sua_api_key_aqui
+# Chave da API de controle. Sem ela a API só escuta em 127.0.0.1.
+# Gere com: python -c "import secrets; print(secrets.token_urlsafe(32))"
+API_KEY=
 
-# (Opcional) Configurações de Áudio
-UDP_TARGET_IP=127.0.0.1
-UDP_PORT_ENVIO=6000
-UDP_PORT_RECEBIMENTO=6001
+# API Key do Google Gemini (opcional)
+GEMINI_API_KEY=
+```
+
+### 🔒 Segurança da API de controle
+
+A API HTTP (porta 8080) faz o bot **entrar em canais de voz e enviar
+mensagens em seu nome**. Por isso:
+
+- Sem `API_KEY`, o servidor sobe **apenas em `127.0.0.1`**.
+- Para expor na rede (ex: Docker), defina `API_KEY` **e** `API_HOST=0.0.0.0`.
+  Sem a chave, a API simplesmente não sobe e um erro é registrado no log.
+- Todas as rotas exigem o header `X-API-Key`.
+- No `docker-compose.yml` as portas são publicadas só em `127.0.0.1`.
+
+```bash
+curl -H "X-API-Key: $API_KEY" http://127.0.0.1:8080/status
 ```
 
 ### Permissões do Bot (OAuth2)
@@ -209,14 +243,14 @@ UDP_PORT_RECEBIMENTO=6001
 Ao convidar o bot para seu servidor, use este link:
 
 ```
-https://discord.com/oauth2/authorize?client_id=1441450379886727221&permissions=8&integration_type=0&scope=bot
+https://discord.com/oauth2/authorize?client_id=SEU_CLIENT_ID&permissions=3213312&scope=bot%20applications.commands
 ```
 
-Permissões necessárias:
-- ✅ Ler/Enviar Mensagens
+⚠️ Evite `permissions=8` (Administrador). O bot só precisa de:
+- ✅ Ler/Enviar Mensagens + Embed Links
 - ✅ Conectar/Falar em Canais de Voz
-- ✅ Gerenciar Mensagens (logs)
-- ✅ Usar Slash Commands
+- ✅ Ver Histórico de Mensagens
+- ✅ Usar Slash Commands (`applications.commands`)
 
 ---
 
@@ -266,21 +300,22 @@ python main.py
 
 Saída esperada:
 ```
-⚙️  Cog Carregado: audio.py
-⚙️  Cog Carregado: cerebro.py
-⚙️  Cog Carregado: monitoring.py
+[INFO] 💾 Banco de dados inicializado em data/clutch.db
+[INFO] ⚙️  Cog carregado: api_controle.py
+[INFO] ⚙️  Cog carregado: audio.py
 ...
-🌲 Slash Commands Sincronizados!
----
-✅ CLUTCH V3.0 ONLINE: ClutchBot
-💾 Banco de Dados SQL inicializado com sucesso!
----
+[INFO] Cogs: 11 carregados, 0 com falha
+[INFO] 🌲 23 slash commands sincronizados
+[INFO] 🌐 API de controle online em http://127.0.0.1:8080
+[INFO] ✅ CLUTCH v3.0 ONLINE como ClutchBot (1 servidores)
 ```
 
 #### Iniciar Dashboard (Opcional)
 ```bash
 streamlit run dashboard.py
 ```
+O dashboard lê `API_KEY_1`/`API_KEY_2` (ou `API_KEY`) do ambiente para
+autenticar na API do bot.
 
 #### Iniciar Receptor de Áudio (Opcional)
 ```bash
@@ -310,7 +345,8 @@ python microfone.py
 | Comando | Descrição | Exemplo |
 |---------|-----------|---------|
 | `/chat <msg>` | Conversa com memória | `/chat Como está o clima?` |
-| `/persona <tipo>` | Muda personalidade | `/persona hacker` |
+| `/persona <tipo>` | Muda personalidade (por servidor) | `/persona hacker` |
+| `/esquecer` | Limpa seu histórico de chat | `/esquecer` |
 | `/rpg [@user]` | Gera ficha de RPG | `/rpg @João` |
 | `/vibe` | Julga vibe da call | `/vibe` |
 | `/shipp <@A> <@B>` | Testa compatibilidade | `/shipp @Ana @Pedro` |
@@ -320,6 +356,7 @@ python microfone.py
 |---------|-----------|---------|
 | `/perfil [@user]` | Ver card de jogador | `/perfil` |
 | `/bio <texto>` | Mudar biografia | `/bio Sou dev backend!` |
+| `/ranking` | Top 10 do servidor | `/ranking` |
 | `/noticias` | Jornal do servidor (IA) | `/noticias` |
 
 ### Utilidades
@@ -328,6 +365,18 @@ python microfone.py
 | `/ping` | Verifica latência | `/ping` |
 | `/avatar [@user]` | Mostra avatar ampliado | `/avatar @User` |
 | `/ajuda` | Menu interativo de ajuda | `/ajuda` |
+| `/status` | Saúde do bot, DB, API e recursos | `/status` |
+| `/uptime` | Tempo online | `/uptime` |
+| `/parar` | Interrompe qualquer som | `/parar` |
+
+### Moderação (requer permissão "Gerenciar Servidor")
+| Comando | Descrição | Exemplo |
+|---------|-----------|---------|
+| `/setlog <canal>` | Define o canal de logs de moderação | `/setlog #logs` |
+
+> 🔐 Os logs de mensagens apagadas/editadas só são publicados **depois** de
+> configurar um canal com `/setlog`. Sem isso, o bot não republica nada —
+> antes ele reexibia no canal público toda mensagem que alguém apagasse.
 
 ---
 
@@ -361,18 +410,32 @@ clutch-discord-bot/
 ├── microfone.py            # Captura de microfone→UDP
 │
 ├── cogs/                   # Módulos do bot (Cogs)
-│   ├── api_controle.py    # API HTTP + MixerSource
+│   ├── api_controle.py    # API HTTP autenticada + MixerSource
 │   ├── audio.py           # TTS e reprodução de arquivos
 │   ├── cerebro.py         # Chat IA + Personas
 │   ├── geral.py           # Comandos utilitários
 │   ├── iconico.py         # RPG, Vibe, Shipp (IA divertida)
+│   ├── monitoring.py      # Health checks (/status, /ping, /uptime)
 │   ├── musica.py          # YouTube player
 │   ├── porteiro.py        # Sistema de boas-vindas
+│   ├── presence_bridge.py # Ingestão de presença para o CLUTCH
 │   ├── social.py          # XP, Níveis, Perfis
 │   └── vigia.py           # Logs de moderação
 │
+├── config/
+│   └── settings.py        # Configuração central (lê o .env)
+│
+├── utils/
+│   ├── ai.py              # Cliente Gemini assíncrono
+│   ├── audio_mix.py       # Mixagem PCM (funções puras)
+│   ├── logger.py          # Logging rotacionado
+│   ├── presence_bridge.py # Cliente da bridge de presença
+│   └── soundboard.py      # Resolução segura de nomes de sons
+│
 ├── infra/
 │   └── database.py        # Gerenciador do SQLite
+│
+├── tests/                 # Testes (python -m unittest discover -s tests -t .)
 │
 ├── assets/
 │   └── sfx/               # Arquivos de efeitos sonoros (.mp3)
@@ -382,8 +445,10 @@ clutch-discord-bot/
 │
 ├── temp/                  # Arquivos temporários (músicas, TTS)
 │
-├── requirements.txt       # Dependências Python
-├── .env                   # Configurações (NÃO VERSIONAR)
+├── requirements.txt           # Dependências do bot
+├── requirements-dashboard.txt # + dashboard/microfone/receptor
+├── .dockerignore              # Impede .env e data/ de entrar na imagem
+├── .env                       # Configurações (NÃO VERSIONAR)
 ├── .env.example           # Template de configuração
 ├── .gitignore            
 └── README.md              # Este arquivo
@@ -399,10 +464,13 @@ clutch-discord-bot/
 ### Erro: "FFmpeg not found"
 **Solução**: Instale FFmpeg e adicione ao PATH do sistema.
 
-### Erro: "No module named 'PyAudio'"
-**Solução (Windows)**:
-1. Baixe o wheel correto: https://www.lfd.uci.edu/~gohlke/pythonlibs/#pyaudio
-2. Instale: `pip install PyAudio-0.2.13-cpXX-cpXX-win_amd64.whl`
+### Erro: "No module named 'pyaudio'"
+PyAudio só é necessário para dashboard/microfone/receptor:
+```bash
+pip install -r requirements-dashboard.txt
+```
+Se a compilação falhar, instale antes a lib nativa `portaudio`
+(ver Pré-requisitos).
 
 ### Bot não responde a comandos
 **Solução**: 
@@ -413,14 +481,21 @@ clutch-discord-bot/
 ### Dashboard não conecta ao bot
 **Solução**:
 1. Certifique-se de que o bot está rodando (`python main.py`)
-2. Verifique se a API está ativa (procure "API V8 ONLINE" nos logs)
-3. Porta 8080 pode estar em uso - altere em `api_controle.py`
+2. Procure `🌐 API de controle online` nos logs
+3. Se aparecer `API HTTP NÃO iniciada`, você definiu `API_HOST` público sem
+   `API_KEY` — defina a chave ou volte para `API_HOST=127.0.0.1`
+4. Erro 401 no dashboard: a `API_KEY` do dashboard não bate com a do bot
+5. Porta 8080 em uso: mude `API_PORT` no `.env`
+
+### `/sfx` não encontra nenhum som
+Coloque os arquivos `.mp3` em `assets/sfx/` (ou no diretório definido em
+`SOUNDS_DIR`). O comando `/sfx` e a rota `POST /play` usam a **mesma** pasta.
 
 ### Áudio robótico/travando no Discord
 **Solução**:
-- Reduza `CHUNK` em `microfone.py` para menos latência
+- Reduza `AUDIO_CHUNK_SIZE` no `.env` para menos latência
 - Verifique sua conexão de internet
-- Aumente `TAMANHO_DO_BUFFER` em `receptor.py` para mais estabilidade
+- Aumente `RECEPTOR_BUFFER_SIZE` no `.env` para mais estabilidade
 
 ---
 
@@ -472,6 +547,6 @@ Este projeto está sob a licença. Veja o arquivo `LICENSE` para mais detalhes.
 
 Desenvolvido com ❤️ por alessandrolsdev
 
-[⬆ Voltar ao topo](#-clutch-discord-bot-v25)
+[⬆ Voltar ao topo](#-clutch-discord-bot-v30)
 
 </div>

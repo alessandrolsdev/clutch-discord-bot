@@ -7,6 +7,11 @@ Módulo que implementa:
 2. MixerSource: Mesa de som virtual que mistura áudio do microfone + soundboard
 3. Sistema de captura e transmissão de áudio do Discord via UDP
 
+Segurança:
+- Todos os endpoints exigem o header ``X-API-Key`` quando ``API_KEY`` está definido.
+- Sem ``API_KEY`` o servidor só sobe em loopback (127.0.0.1), porque estes
+  endpoints permitem que o bot entre em canais de voz e envie mensagens.
+
 Arquitetura de Áudio:
 ┌──────────────┐      UDP       ┌─────────────┐
 │Dashboard/Mic │ ──────────────> │  Bot (API)  │
@@ -27,24 +32,32 @@ Arquitetura de Áudio:
 └──────────────┘
 """
 
-import discord
-from discord.ext import commands, voice_recv
-from aiohttp import web
-import socket
 import asyncio
-import os
-import audioop
+import hmac
+import ipaddress
+import socket
 import time
-from typing import Optional, Dict, List
+from pathlib import Path
+from typing import Dict, List, Optional
+
+import discord
+from aiohttp import web
+from discord.ext import commands, voice_recv
+
+from config.settings import settings
+from utils.audio_mix import mix_frames, normalize_frame, scale_volume
+from utils.logger import get_logger
+from utils.soundboard import listar_sons, resolver_som
+
+logger = get_logger(__name__)
 
 # --- CONFIGURAÇÕES DE REDE ---
-# Carrega configurações do arquivo .env para segurança
-# UDP_TARGET_IP: IP do computador receptor (obtenha com 'ipconfig' no Windows)
-# UDP_PORT_ENVIO: Porta do receptor (padrão: 6000)
-# UDP_PORT_RECEBIMENTO: Porta do microfone (padrão: 6001)
-UDP_IP_ENVIO = os.getenv("UDP_TARGET_IP", "127.0.0.1")
-UDP_PORT_ENVIO = int(os.getenv("UDP_PORT_ENVIO", "6000"))
-UDP_PORT_RECEBIMENTO = int(os.getenv("UDP_PORT_RECEBIMENTO", "6001"))
+UDP_IP_ENVIO = settings.audio.udp_target_ip
+UDP_PORT_ENVIO = settings.audio.udp_port_send
+UDP_PORT_RECEBIMENTO = settings.audio.udp_port_receive
+
+# Diretório único de sons, compartilhado com o cog de áudio (/sfx).
+SOUNDS_DIR = Path(settings.audio.sounds_dir).resolve()
 
 
 class MixerSource(discord.AudioSource):
@@ -54,8 +67,6 @@ class MixerSource(discord.AudioSource):
     Fontes:
     1. Microfone/Rádio: Recebido via UDP (walkie-talkie virtual)
     2. Soundboard/FX: Arquivos MP3 tocados on-demand
-
-    O áudio processado é enviado para o canal de voz do Discord.
 
     Attributes:
         sock: Socket UDP para receber áudio do microfone
@@ -69,6 +80,8 @@ class MixerSource(discord.AudioSource):
         """Inicializa o mixer com valores padrão."""
         # Entrada do Rádio (Walkie-Talkie via UDP)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # SO_REUSEADDR evita "Address already in use" ao reconectar rapidamente.
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind(("0.0.0.0", UDP_PORT_RECEBIMENTO))
         self.sock.setblocking(False)  # Non-blocking para não travar o bot
 
@@ -77,23 +90,36 @@ class MixerSource(discord.AudioSource):
         self.current_fx_name: Optional[str] = None
 
         # Controles de Volume (0.0 = mudo, 1.0 = 100%)
-        self.vol_mic: float = 1.0
-        self.vol_fx: float = 0.5
+        self.vol_mic: float = settings.audio.mixer_volume_mic
+        self.vol_fx: float = settings.audio.mixer_volume_fx
+        self._closed = False
 
     def tocar_efeito(self, caminho: str, nome_simples: str) -> None:
         """
         Carrega um arquivo de áudio para tocar sobre a voz.
 
         Args:
-            caminho: Caminho absoluto para o arquivo MP3
+            caminho: Caminho absoluto para o arquivo de áudio
             nome_simples: Nome legível do efeito (ex: "ALARME")
         """
         try:
+            # Libera o efeito anterior antes de trocar (evita vazar processos ffmpeg)
+            self._limpar_fx()
             self.fx_source = discord.FFmpegPCMAudio(caminho)
             self.current_fx_name = nome_simples
-            print(f"🎛️ Mixer: Injetando {nome_simples}")
+            logger.info("Mixer: injetando efeito %s", nome_simples)
         except Exception as e:
-            print(f"❌ Erro ao carregar efeito: {e}")
+            logger.error("Erro ao carregar efeito %s: %s", nome_simples, e)
+
+    def _limpar_fx(self) -> None:
+        """Encerra o efeito atual, se houver."""
+        if self.fx_source:
+            try:
+                self.fx_source.cleanup()
+            except Exception:
+                logger.debug("Falha ao limpar fx_source", exc_info=True)
+        self.fx_source = None
+        self.current_fx_name = None
 
     def read(self) -> bytes:
         """
@@ -104,73 +130,72 @@ class MixerSource(discord.AudioSource):
         Returns:
             bytes: 3840 bytes de áudio PCM estéreo misturado
         """
-        # 1. Lê Microfone via UDP (não-bloqueante)
-        try:
-            radio_data, _ = self.sock.recvfrom(3840)
-        except BlockingIOError:
-            # Sem dados disponíveis = silêncio
-            radio_data = b"\x00" * 3840
+        if self._closed:
+            return b""
 
-        # Aplica Volume no Microfone
-        if self.vol_mic != 1.0:
-            try:
-                radio_data = audioop.mul(
-                    radio_data, 2, self.vol_mic
-                )  # 2 = tamanho de sample (16-bit)
-            except Exception:
-                pass
+        # 1. Lê Microfone via UDP (não-bloqueante).
+        # Datagramas podem chegar com tamanho diferente do frame do Discord,
+        # então normalizamos para exatamente FRAME_BYTES antes de qualquer
+        # operação — audioop exige fragmentos do mesmo tamanho.
+        try:
+            radio_data, _ = self.sock.recvfrom(65536)
+        except (BlockingIOError, InterruptedError):
+            radio_data = b""  # Sem dados disponíveis = silêncio
+        except OSError:
+            logger.debug("Erro ao ler socket UDP do mixer", exc_info=True)
+            radio_data = b""
+
+        radio_data = scale_volume(normalize_frame(radio_data), self.vol_mic)
 
         # 2. Lê Efeitos Sonoros (se houver)
-        fx_data = b"\x00" * 3840
+        fx_data = b""
         if self.fx_source:
             try:
                 temp = self.fx_source.read()
                 if temp:
-                    # FFmpeg pode retornar menos de 3840 bytes
-                    # Preenche com silêncio para manter sincronização
-                    if len(temp) < 3840:
-                        temp += b"\x00" * (3840 - len(temp))
                     fx_data = temp
                 else:
-                    # Som acabou - limpa
-                    self.fx_source.cleanup()
-                    self.fx_source = None
-                    self.current_fx_name = None
+                    self._limpar_fx()  # Som acabou
             except Exception:
-                self.fx_source = None
-                self.current_fx_name = None
+                logger.debug("Erro ao ler fx_source", exc_info=True)
+                self._limpar_fx()
 
-        # Aplica Volume nos Efeitos
-        if self.vol_fx != 1.0:
-            try:
-                fx_data = audioop.mul(fx_data, 2, self.vol_fx)
-            except Exception:
-                pass
+        fx_data = scale_volume(normalize_frame(fx_data), self.vol_fx)
 
-        # 3. Mistura Final (soma as ondas de áudio)
-        # audioop.add soma os dois canais sem clipping automático
-        return audioop.add(radio_data, fx_data, 2)
+        # 3. Mistura Final (soma as ondas de áudio, com saturação)
+        return mix_frames(radio_data, fx_data)
 
     def cleanup(self) -> None:
         """Libera recursos ao desconectar do canal de voz."""
-        self.sock.close()
-        if self.fx_source:
-            self.fx_source.cleanup()
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self.sock.close()
+        except Exception:
+            logger.debug("Falha ao fechar socket do mixer", exc_info=True)
+        self._limpar_fx()
+
+
+def _is_loopback(host: str) -> bool:
+    """Retorna True se o host for um endereço de loopback."""
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return host in {"localhost", ""}
 
 
 class APIControle(commands.Cog):
     """
     Cog que expõe API HTTP para controle externo do bot.
 
-    Endpoints:
+    Endpoints (todos exigem X-API-Key quando API_KEY está configurado):
     - GET  /status: Retorna estado atual do bot
     - POST /connect: Conecta em um canal de voz
     - POST /disconnect: Desconecta do canal
     - POST /play: Toca um som do soundboard
-    - POST /command: Executa comando do bot no chat
+    - POST /command: Envia mensagem no chat
     - POST /volume: Ajusta volumes do mixer
-
-    Usada pelo Dashboard (Streamlit) para interface visual.
     """
 
     def __init__(self, bot: commands.Bot):
@@ -184,15 +209,15 @@ class APIControle(commands.Cog):
         self.transmitting: bool = False  # Flag se está transmitindo áudio
         self.socket_envio = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.mixer: Optional[MixerSource] = None
-        self.speaking_cache: Dict[int, float] = (
-            {}
-        )  # user_id -> timestamp da última fala
+        self.speaking_cache: Dict[int, float] = {}  # user_id -> ts da última fala
+        self.runner: Optional[web.AppRunner] = None
+        self._server_task: Optional[asyncio.Task] = None
 
     def callback_audio(self, user: Optional[discord.Member], data) -> None:
         """
         Callback chamado para cada pacote de áudio recebido do Discord.
 
-        Envia o áudio capturado via UDP para o receptor (speakers do Windows).
+        Envia o áudio capturado via UDP para o receptor (speakers).
 
         Args:
             user: Membro que está falando (pode ser None)
@@ -209,8 +234,26 @@ class APIControle(commands.Cog):
         if data:
             try:
                 self.socket_envio.sendto(data.pcm, (UDP_IP_ENVIO, UDP_PORT_ENVIO))
-            except Exception:
-                pass  # Ignora erros de rede silenciosamente
+            except OSError:
+                logger.debug("Falha ao enviar áudio via UDP", exc_info=True)
+
+    # --- AUTENTICAÇÃO ---
+
+    @web.middleware
+    async def auth_middleware(self, request: web.Request, handler):
+        """Exige X-API-Key em todas as rotas quando uma chave está configurada."""
+        expected = settings.api.api_key
+        if expected:
+            provided = request.headers.get("X-API-Key", "")
+            # compare_digest evita vazar informação por timing
+            if not hmac.compare_digest(provided, expected):
+                logger.warning(
+                    "Requisição não autorizada em %s vinda de %s",
+                    request.path,
+                    request.remote,
+                )
+                return web.json_response({"error": "unauthorized"}, status=401)
+        return await handler(request)
 
     # --- ENDPOINTS DA API (HTTP) ---
 
@@ -228,14 +271,17 @@ class APIControle(commands.Cog):
         status_bot = "Online" if self.bot.is_ready() else "Offline"
         channel_name = "---"
         members_data: List[Dict] = []
-        volumes = {"mic": 1.0, "fx": 0.5}
+        volumes = {
+            "mic": settings.audio.mixer_volume_mic,
+            "fx": settings.audio.mixer_volume_fx,
+        }
 
         player_state = "IDLE"
         current_track = "---"
 
         if self.bot.voice_clients:
             vc = self.bot.voice_clients[0]
-            channel_name = vc.channel.name
+            channel_name = getattr(vc.channel, "name", "---")
 
             if self.mixer:
                 volumes["mic"] = self.mixer.vol_mic
@@ -251,27 +297,27 @@ class APIControle(commands.Cog):
 
             # Radar de Membros com indicador de speaking
             now = time.time()
-            for member in vc.channel.members:
-                if member.id == self.bot.user.id:
+            for member in getattr(vc.channel, "members", []):
+                if self.bot.user and member.id == self.bot.user.id:
                     continue  # Ignora o próprio bot
 
                 last_spoke = self.speaking_cache.get(member.id, 0)
                 is_speaking = (now - last_spoke) < 0.5  # Falou nos últimos 0.5s?
+
+                # member.voice é None quando o estado ainda não chegou no cache
+                voice_state = member.voice
+                muted = bool(
+                    voice_state and (voice_state.self_mute or voice_state.mute)
+                )
 
                 members_data.append(
                     {
                         "name": member.display_name,
                         "avatar": member.display_avatar.url,
                         "speaking": is_speaking,
-                        "muted": member.voice.self_mute or member.voice.mute,
+                        "muted": muted,
                     }
                 )
-
-        # Lista de Sons disponíveis no soundboard
-        sons: List[str] = []
-        path = "/app/assets/sounds"
-        if os.path.exists(path):
-            sons = sorted([f for f in os.listdir(path) if f.endswith(".mp3")])
 
         return web.json_response(
             {
@@ -281,11 +327,11 @@ class APIControle(commands.Cog):
                 "current_track": current_track,
                 "members": members_data,
                 "volumes": volumes,
-                "sounds": sons,
+                "sounds": listar_sons(SOUNDS_DIR),
             }
         )
 
-    async def conectar_drone(self, channel_id: str) -> str:
+    async def conectar_drone(self, channel_id) -> str:
         """
         Conecta o bot em um canal de voz específico.
 
@@ -296,9 +342,14 @@ class APIControle(commands.Cog):
             str: Mensagem de sucesso ou erro
         """
         try:
-            channel = self.bot.get_channel(int(channel_id))
-            if not channel:
-                return "Canal não encontrado (404)."
+            channel_id = int(channel_id)
+        except (TypeError, ValueError):
+            return "channel_id inválido."
+
+        try:
+            channel = self.bot.get_channel(channel_id)
+            if not isinstance(channel, discord.VoiceChannel):
+                return "Canal de voz não encontrado (404)."
 
             # Desconecta de qualquer canal anterior
             if self.bot.voice_clients:
@@ -330,14 +381,15 @@ class APIControle(commands.Cog):
             )
             return f"Conectado: {channel.name}"
         except Exception as e:
-            return f"Erro: {str(e)}"
+            logger.error("Erro ao conectar no canal %s: %s", channel_id, e)
+            return f"Erro: {e}"
 
-    async def tocar_som(self, nome_arquivo: str) -> str:
+    async def tocar_som(self, nome_arquivo: Optional[str]) -> str:
         """
         Toca um som do soundboard sobre o áudio do microfone.
 
         Args:
-            nome_arquivo: Nome do arquivo MP3 (ex: "alarme.mp3")
+            nome_arquivo: Nome do arquivo (ex: "alarme.mp3")
 
         Returns:
             str: Mensagem de sucesso ou erro
@@ -345,45 +397,64 @@ class APIControle(commands.Cog):
         if not self.mixer:
             return "Rádio desligado."
 
-        caminho = f"/app/assets/sounds/{nome_arquivo}"
-        if not os.path.exists(caminho):
+        caminho = resolver_som(SOUNDS_DIR, nome_arquivo)
+        if caminho is None:
             return "Arquivo 404"
 
-        nome_simples = nome_arquivo.replace(".mp3", "").upper()
-        self.mixer.tocar_efeito(caminho, nome_simples)
+        nome_simples = caminho.stem.upper()
+        self.mixer.tocar_efeito(str(caminho), nome_simples)
         return f"Injetado: {nome_simples}"
 
-    async def executar_comando(self, channel_id: str, texto: str) -> str:
+    async def executar_comando(self, channel_id, texto: Optional[str]) -> str:
         """
-        Envia uma mensagem ou executa um comando no chat.
+        Envia uma mensagem no chat.
+
+        Nota de segurança: esta rota NÃO invoca comandos do bot. Invocar um
+        comando a partir de uma mensagem do próprio bot faria ``ctx.author``
+        ser o bot, contornando qualquer checagem de permissão dos comandos.
 
         Args:
             channel_id: ID do canal de texto
-            texto: Mensagem ou comando a enviar
+            texto: Mensagem a enviar
 
         Returns:
             str: Status da operação
         """
-        channel = self.bot.get_channel(int(channel_id))
-        if not channel:
+        if not texto or not texto.strip():
+            return "Texto vazio."
+
+        try:
+            channel = self.bot.get_channel(int(channel_id))
+        except (TypeError, ValueError):
+            return "channel_id inválido."
+
+        if not isinstance(channel, discord.abc.Messageable):
             return "Chat 404"
 
-        if texto.startswith(self.bot.command_prefix):
-            # É um comando - invoca através do bot
-            msg = await channel.send(f"🤖 **CMD:** {texto}")
-            ctx = await self.bot.get_context(msg)
-            await self.bot.invoke(ctx)
-            return "Comando invocado."
-        else:
-            # É uma mensagem comum
-            await channel.send(texto)
-            return "Mensagem enviada."
+        # Trunca no limite do Discord e neutraliza menções em massa
+        conteudo = texto[:2000]
+        await channel.send(
+            conteudo,
+            allowed_mentions=discord.AllowedMentions(
+                everyone=False, roles=False, users=True
+            ),
+        )
+        return "Mensagem enviada."
 
     # --- ROTAS HTTP (Handlers) ---
 
+    @staticmethod
+    async def _json_body(request: web.Request) -> dict:
+        """Lê o corpo JSON da requisição tolerando corpo vazio/inválido."""
+        try:
+            data = await request.json()
+        except Exception:
+            return {}
+        return data if isinstance(data, dict) else {}
+
     async def handle_connect(self, request: web.Request) -> web.Response:
         """POST /connect - Conecta em um canal de voz."""
-        data = await request.json()
+        data = await self._json_body(request)
         return web.json_response(
             {"message": await self.conectar_drone(data.get("channel_id"))}
         )
@@ -391,21 +462,23 @@ class APIControle(commands.Cog):
     async def handle_disconnect(self, request: web.Request) -> web.Response:
         """POST /disconnect - Desconecta do canal de voz."""
         self.transmitting = False
-        self.mixer = None
         if self.bot.voice_clients:
+            # disconnect() dispara AudioSource.cleanup(), que fecha o socket UDP.
             await self.bot.voice_clients[0].disconnect()
+        elif self.mixer:
+            self.mixer.cleanup()
+        self.mixer = None
+        self.speaking_cache.clear()
         return web.json_response({"message": "Desconectado"})
 
     async def handle_play(self, request: web.Request) -> web.Response:
         """POST /play - Toca um som do soundboard."""
-        data = await request.json()
-        return web.json_response(
-            {"message": await self.tocar_som(data.get("filename"))}
-        )
+        data = await self._json_body(request)
+        return web.json_response({"message": await self.tocar_som(data.get("filename"))})
 
     async def handle_command(self, request: web.Request) -> web.Response:
-        """POST /command - Executa comando do bot."""
-        data = await request.json()
+        """POST /command - Envia uma mensagem em um canal de texto."""
+        data = await self._json_body(request)
         return web.json_response(
             {
                 "message": await self.executar_comando(
@@ -416,21 +489,47 @@ class APIControle(commands.Cog):
 
     async def handle_volume(self, request: web.Request) -> web.Response:
         """POST /volume - Ajusta volumes do mixer."""
-        data = await request.json()
-        if self.mixer:
+        data = await self._json_body(request)
+        if not self.mixer:
+            return web.json_response({"msg": "Rádio desligado."}, status=409)
+
+        try:
             if "mic" in data:
-                self.mixer.vol_mic = float(data["mic"])
+                self.mixer.vol_mic = min(max(float(data["mic"]), 0.0), 2.0)
             if "fx" in data:
-                self.mixer.vol_fx = float(data["fx"])
-        return web.json_response({"msg": "Volume OK"})
+                self.mixer.vol_fx = min(max(float(data["fx"]), 0.0), 2.0)
+        except (TypeError, ValueError):
+            return web.json_response({"error": "volume inválido"}, status=400)
+
+        return web.json_response(
+            {"msg": "Volume OK", "mic": self.mixer.vol_mic, "fx": self.mixer.vol_fx}
+        )
 
     async def start_server(self) -> None:
         """
-        Inicia o servidor HTTP na porta 8080.
+        Inicia o servidor HTTP.
 
-        Chamado automaticamente ao carregar o cog.
+        Recusa expor a API fora de loopback sem API_KEY: os endpoints permitem
+        conectar o bot em canais de voz e enviar mensagens em nome dele.
         """
-        app = web.Application()
+        host = settings.api.host
+        port = settings.api.port
+
+        if not settings.api.api_key and not _is_loopback(host):
+            logger.error(
+                "API HTTP NÃO iniciada: host %s é público e API_KEY não está definido. "
+                "Defina API_KEY no .env ou use API_HOST=127.0.0.1.",
+                host,
+            )
+            return
+
+        if not settings.api.api_key:
+            logger.warning(
+                "API HTTP sem autenticação (API_KEY vazio) — escutando apenas em %s.",
+                host,
+            )
+
+        app = web.Application(middlewares=[self.auth_middleware])
         app.router.add_get("/status", self.handle_status)
         app.router.add_post("/connect", self.handle_connect)
         app.router.add_post("/disconnect", self.handle_disconnect)
@@ -438,15 +537,29 @@ class APIControle(commands.Cog):
         app.router.add_post("/command", self.handle_command)
         app.router.add_post("/volume", self.handle_volume)
 
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, "0.0.0.0", 8080)
+        self.runner = web.AppRunner(app)
+        await self.runner.setup()
+        site = web.TCPSite(self.runner, host, port)
         await site.start()
-        print("🌐 API V8 (TACTICAL SYSTEM) ONLINE na porta 8080")
+        logger.info("🌐 API de controle online em http://%s:%s", host, port)
 
     async def cog_load(self) -> None:
         """Hook executado quando o cog é carregado - inicia a API."""
-        self.bot.loop.create_task(self.start_server())
+        # asyncio.create_task usa o loop em execução; self.bot.loop ainda não
+        # existe se o cog for carregado antes do login.
+        self._server_task = asyncio.create_task(self.start_server())
+
+    async def cog_unload(self) -> None:
+        """Libera servidor HTTP e sockets ao descarregar o cog."""
+        if self._server_task:
+            self._server_task.cancel()
+        if self.runner:
+            await self.runner.cleanup()
+            self.runner = None
+        if self.mixer:
+            self.mixer.cleanup()
+            self.mixer = None
+        self.socket_envio.close()
 
 
 async def setup(bot: commands.Bot) -> None:

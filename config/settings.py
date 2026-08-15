@@ -133,6 +133,9 @@ class AudioConfig:
         default_factory=lambda: float(get_env("MIXER_VOLUME_FX", "1.0"))
     )
 
+    # Diretório único do soundboard, usado pelo comando /sfx e pela API /play
+    sounds_dir: str = field(default_factory=lambda: get_env("SOUNDS_DIR", "assets/sfx"))
+
 
 @dataclass
 class AIConfig:
@@ -143,7 +146,7 @@ class AIConfig:
 
     # Modelo a usar
     model_name: str = field(
-        default_factory=lambda: get_env("GEMINI_MODEL", "gemini-2.0-flash-exp")
+        default_factory=lambda: get_env("GEMINI_MODEL", "gemini-2.5-flash")
     )
 
     # Tamanho do histórico de conversa por usuário
@@ -185,16 +188,12 @@ class APIConfig:
     # Porta do servidor
     port: int = field(default_factory=lambda: int(get_env("API_PORT", "8080")))
 
-    # Host (0.0.0.0 = aceita de qualquer IP)
-    host: str = field(default_factory=lambda: get_env("API_HOST", "0.0.0.0"))
+    # Host. Padrão loopback: a API controla o bot (entra em call, envia
+    # mensagens), então só é exposta na rede se houver API_KEY definido.
+    host: str = field(default_factory=lambda: get_env("API_HOST", "127.0.0.1"))
 
-    # API Key para autenticação (opcional)
+    # API Key para autenticação — obrigatória para expor a API fora do loopback
     api_key: Optional[str] = field(default_factory=lambda: get_env("API_KEY"))
-
-    # CORS habilitado
-    cors_enabled: bool = field(
-        default_factory=lambda: get_env("API_CORS_ENABLED", "true").lower() == "true"
-    )
 
 
 @dataclass
@@ -342,10 +341,10 @@ class Settings:
     def __post_init__(self):
         """Validações pós-inicialização"""
         # Cria diretórios necessários
-        self.logging.log_dir.mkdir(exist_ok=True)
-        Path("data").mkdir(exist_ok=True)
-        Path("temp").mkdir(exist_ok=True)
-        Path("assets/sfx").mkdir(parents=True, exist_ok=True)
+        self.logging.log_dir.mkdir(parents=True, exist_ok=True)
+        Path(self.database.db_path).parent.mkdir(parents=True, exist_ok=True)
+        Path("temp").mkdir(parents=True, exist_ok=True)
+        Path(self.audio.sounds_dir).mkdir(parents=True, exist_ok=True)
 
     def print_config(self):
         """Imprime configuração atual (útil para debug)"""
@@ -353,34 +352,37 @@ class Settings:
         print(f"🔧 CONFIGURAÇÃO CLUTCH BOT v{self.version}")
         print("=" * 50)
 
-        print(f"\n[BOT]")
+        print("\n[BOT]")
         print(
             f"  Token: {'✅ Configurado' if self.bot.token else '❌ Não configurado'}"
         )
         print(f"  Prefix: {self.bot.prefix}")
 
-        print(f"\n[ÁUDIO]")
+        print("\n[ÁUDIO]")
         print(f"  Sample Rate: {self.audio.sample_rate} Hz")
         print(f"  Chunk Size: {self.audio.chunk_size}")
         print(f"  Channels: {self.audio.channels}")
         print(f"  UDP: {self.audio.udp_target_ip}:{self.audio.udp_port_send}")
 
-        print(f"\n[IA]")
+        print("\n[IA]")
         print(
             f"  Gemini API: {'✅ Configurado' if self.ai.api_key else '❌ Não configurado'}"
         )
         print(f"  Model: {self.ai.model_name}")
 
-        print(f"\n[API]")
+        print("\n[API]")
         print(f"  Endpoint: http://{self.api.host}:{self.api.port}")
+        print(
+            f"  Autenticação: {'✅ API_KEY definida' if self.api.api_key else '⚠️  sem API_KEY (só loopback)'}"
+        )
 
-        print(f"\n[PRESENCE BRIDGE]")
+        print("\n[PRESENCE BRIDGE]")
         print(f"  Dry-run: {'✅ Sim' if self.presence_bridge.dry_run else '❌ Não'}")
         print(
             f"  CLUTCH Base URL: {self.presence_bridge.api_base_url or 'Não configurado'}"
         )
 
-        print(f"\n[LOGGING]")
+        print("\n[LOGGING]")
         print(f"  Level: {self.logging.level}")
         print(f"  Dir: {self.logging.log_dir}")
 
