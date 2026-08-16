@@ -21,12 +21,18 @@ CATEGORIAS = {
         "description": "Play, SFX, Voz",
         "emoji": "🎧",
         "comandos": (
-            "`/play <busca>` - Toca música do YouTube (com botões!)\n"
-            "`/stop` - Para a música\n"
+            "**Player**\n"
+            "`/play <busca>` - Toca ou enfileira (aceita playlist)\n"
+            "`/fila [pagina]` - Mostra a fila\n"
+            "`/tocando` - Faixa atual com progresso\n"
+            "`/pular` · `/pausar` · `/retomar` · `/stop`\n"
+            "`/loop <modo>` - Repetir faixa ou fila\n"
+            "`/embaralhar` · `/remover <n>` · `/mover <a> <b>`\n"
+            "`/limparfila` · `/volume <0-150>`\n\n"
+            "**Voz e efeitos**\n"
             "`/sfx <nome>` - Toca efeito sonoro\n"
             "`/diga <texto>` - Fala em voz alta (TTS)\n"
-            "`/entrar` · `/sair` - Entra/sai do canal de voz\n"
-            "`/parar` - Interrompe qualquer som"
+            "`/entrar` · `/sair` · `/parar`"
         ),
     },
     "ia": {
@@ -50,7 +56,41 @@ CATEGORIAS = {
             "`/perfil` - Ver seu Card de Jogador\n"
             "`/bio <texto>` - Mudar sua biografia\n"
             "`/ranking` - Top 10 do servidor\n"
+            "`/avisos` - Ver suas advertências\n"
             "`/noticias` - Jornal do servidor (IA)"
+        ),
+    },
+    "moderacao": {
+        "label": "🛡️ Moderação",
+        "description": "Ban, castigo, avisos",
+        "emoji": "🔨",
+        "comandos": (
+            "`/ban` · `/unban` · `/kick` - Remoção de membros\n"
+            "`/castigo <min>` · `/descastigo` - Silenciar\n"
+            "`/avisar` · `/avisos` · `/removeraviso` · `/limparavisos`\n"
+            "`/limpar <n>` - Apaga mensagens em massa\n"
+            "`/lento <seg>` - Modo lento do canal\n"
+            "`/trancar` · `/destrancar` - Fecha/abre o canal\n"
+            "_Requer as permissões correspondentes._"
+        ),
+    },
+    "config": {
+        "label": "⚙️ Configuração",
+        "description": "Cargos, XP, logs",
+        "emoji": "🔧",
+        "comandos": (
+            "**Cargos**\n"
+            "`/nivelcargo definir <nivel> <cargo>` - Recompensa por nível\n"
+            "`/nivelcargo listar` · `/nivelcargo remover`\n"
+            "`/autorole <cargo>` - Cargo automático ao entrar\n"
+            "`/painelcargos` - Painel com botões de cargo\n\n"
+            "**Servidor**\n"
+            "`/setlog <canal>` - Canal de logs\n"
+            "`/boasvindas <canal>` - Canal de boas-vindas\n"
+            "`/levelupcanal <canal>` - Onde anunciar level ups\n"
+            "`/xpcanal [canal]` - Liga/desliga XP num canal\n"
+            "`/xp <true|false>` - Liga/desliga a gamificação\n"
+            "_Requer 'Gerenciar Servidor' ou 'Gerenciar Cargos'._"
         ),
     },
     "utils": {
@@ -62,7 +102,7 @@ CATEGORIAS = {
             "`/avatar <user>` - Ver foto de perfil\n"
             "`/status` - Saúde do sistema\n"
             "`/uptime` - Tempo online\n"
-            "`/setlog <canal>` - Canal de logs (admin)"
+            "`/ajuda` - Este painel"
         ),
     },
 }

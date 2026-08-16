@@ -36,8 +36,9 @@ from discord import app_commands
 from discord.ext import commands
 
 from config.settings import settings
-from infra.database import get_conexao
+from infra.database import alternar_canal_ignorado, get_conexao
 from utils.ai import gemini
+from utils.guild_config import guild_config
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -185,6 +186,11 @@ class Social(commands.Cog):
         if message.author.bot or not message.guild:
             return  # Ignora bots e DMs
 
+        # Config vem do cache em memória: sem query ao banco por mensagem
+        config = await guild_config.obter(message.guild.id)
+        if not config.da_xp_no_canal(message.channel.id):
+            return
+
         agora = time.time()
         ultimo = self.xp_cooldown.get(message.author.id, 0)
         if agora - ultimo < self.config.xp_cooldown:
@@ -224,12 +230,7 @@ class Social(commands.Cog):
             await db.commit()
 
         if subiu_de_nivel:
-            try:
-                await message.channel.send(
-                    f"🎉 **LEVEL UP!** {message.author.mention} subiu para o **Nível {level}**!"
-                )
-            except discord.HTTPException as e:
-                logger.warning("Não foi possível anunciar level up: %s", e)
+            await self._anunciar_level_up(message, config, level)
 
         # Conquistas
         await self.anunciar_badge(
@@ -246,6 +247,55 @@ class Social(commands.Cog):
             await self.anunciar_badge(
                 message.channel, message.author.id, message.author.mention, BADGE_VIP
             )
+
+    async def _anunciar_level_up(
+        self,
+        message: discord.Message,
+        config,
+        level: int,
+    ) -> None:
+        """
+        Anuncia o level up e concede os cargos de recompensa.
+
+        O canal de anúncio é configurável (/levelupcanal); sem configuração,
+        o aviso sai no próprio canal onde a pessoa falou.
+        """
+        # Recompensa em cargo (delegada ao cog Cargos)
+        cargos_ganhos = []
+        cargos_cog = self.bot.get_cog("Cargos")
+        if cargos_cog:
+            try:
+                cargos_ganhos = await cargos_cog.conceder_cargos_de_nivel(
+                    message.author, level
+                )
+            except Exception as e:
+                logger.warning("Falha ao conceder cargos de nível: %s", e)
+
+        if not config.levelup_enabled:
+            return
+
+        destino = message.channel
+        if config.levelup_channel_id:
+            canal = message.guild.get_channel(config.levelup_channel_id)
+            if canal is not None:
+                destino = canal
+
+        texto = (
+            f"🎉 **LEVEL UP!** {message.author.mention} subiu para o **Nível {level}**!"
+        )
+        if cargos_ganhos:
+            nomes = ", ".join(f"**{c.name}**" for c in cargos_ganhos)
+            texto += f"\n🎖️ Novo cargo desbloqueado: {nomes}"
+
+        try:
+            await destino.send(
+                texto,
+                allowed_mentions=discord.AllowedMentions(
+                    everyone=False, roles=False, users=[message.author]
+                ),
+            )
+        except discord.HTTPException as e:
+            logger.warning("Não foi possível anunciar level up: %s", e)
 
     @commands.Cog.listener()
     async def on_voice_state_update(
@@ -266,6 +316,11 @@ class Social(commands.Cog):
             return
 
         if not saiu or member.id not in self.voice_sessions:
+            return
+
+        config = await guild_config.obter(member.guild.id)
+        if not config.xp_enabled:
+            self.voice_sessions.pop(member.id, None)
             return
 
         inicio = self.voice_sessions.pop(member.id)
@@ -299,6 +354,14 @@ class Social(commands.Cog):
                 (novo_voice, novo_xp, level, member.id),
             )
             await db.commit()
+
+        if level > row["level"]:
+            cargos_cog = self.bot.get_cog("Cargos")
+            if cargos_cog:
+                try:
+                    await cargos_cog.conceder_cargos_de_nivel(member, level)
+                except Exception as e:
+                    logger.warning("Falha ao conceder cargos por voz: %s", e)
 
         if novo_voice >= MINUTOS_PARA_PODCASTER:
             await self.add_badge(member.id, BADGE_PODCASTER)
@@ -394,7 +457,72 @@ class Social(commands.Cog):
         )
         await interaction.response.send_message(embed=embed)
 
+    # --- CONFIGURAÇÃO (ADMIN) ---
+
+    @app_commands.command(
+        name="xpcanal", description="Liga/desliga o ganho de XP em um canal"
+    )
+    @app_commands.describe(canal="Canal a alternar (padrão: o atual)")
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
+    async def xpcanal(
+        self,
+        interaction: discord.Interaction,
+        canal: Optional[discord.TextChannel] = None,
+    ):
+        """Alterna se um canal concede XP."""
+        alvo = canal or interaction.channel
+        ignorado = await alternar_canal_ignorado(interaction.guild.id, alvo.id)
+        guild_config.invalidar(interaction.guild.id)
+
+        if ignorado:
+            await interaction.response.send_message(
+                f"🚫 {alvo.mention} não concede mais XP.", ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                f"✅ {alvo.mention} voltou a conceder XP.", ephemeral=True
+            )
+
+    @app_commands.command(
+        name="levelupcanal", description="Define onde anunciar os level ups"
+    )
+    @app_commands.describe(canal="Deixe vazio para anunciar no canal da mensagem")
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
+    async def levelupcanal(
+        self,
+        interaction: discord.Interaction,
+        canal: Optional[discord.TextChannel] = None,
+    ):
+        """Define o canal de anúncio de level up."""
+        await guild_config.atualizar(
+            interaction.guild.id, levelup_channel_id=canal.id if canal else None
+        )
+
+        if canal:
+            await interaction.response.send_message(
+                f"✅ Level ups serão anunciados em {canal.mention}.", ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                "✅ Level ups serão anunciados no canal da mensagem.", ephemeral=True
+            )
+
+    @app_commands.command(name="xp", description="Liga ou desliga o sistema de XP")
+    @app_commands.describe(ativo="True para ligar, False para desligar")
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
+    async def xp(self, interaction: discord.Interaction, ativo: bool):
+        """Liga/desliga a gamificação no servidor."""
+        await guild_config.atualizar(interaction.guild.id, xp_enabled=int(ativo))
+        await interaction.response.send_message(
+            f"{'✅ Sistema de XP ligado.' if ativo else '🚫 Sistema de XP desligado.'}",
+            ephemeral=True,
+        )
+
     @app_commands.command(name="noticias", description="Jornal do Servidor (IA)")
+    @app_commands.checks.cooldown(1, 60.0, key=lambda i: i.guild_id)
     async def noticias(self, interaction: discord.Interaction):
         """Gera uma 'fofoca' do servidor com base no líder do ranking."""
         if not gemini.is_enabled:

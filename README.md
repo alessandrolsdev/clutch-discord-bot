@@ -31,7 +31,10 @@ Bot Discord avançado com **Inteligência Artificial**, **Sistema de Áudio em T
 ## ✨ Funcionalidades
 
 ### 🎵 Sistema de Áudio Avançado
-- **Reprodução de Música**: Busca e toca músicas do YouTube com botões interativos
+- **Player com Fila**: `/play` enfileira, com skip, loop, shuffle, mover e volume
+- **Streaming direto**: o áudio vai do YouTube ao FFmpeg sem passar pelo disco
+- **Playlists**: um link de playlist enfileira até 50 faixas de uma vez
+- **Auto-disconnect**: sai da call sozinho quando fica vazia ou ociosa
 - **Text-to-Speech (TTS)**: Vozes em português brasileiro natural via Edge TTS
 - **Soundboard**: Efeitos sonoros customizáveis com autocomplete
 - **Modulador de Voz**: Transforma voz em tempo real usando Pedalboard
@@ -51,9 +54,23 @@ Bot Discord avançado com **Inteligência Artificial**, **Sistema de Áudio em T
 - **Perfil Customizável**: Bio personalizada e cards visuais
 - **Leaderboard**: Ranking automático de membros
 
+### 🛡️ Moderação
+- **Punições**: ban, kick, castigo (timeout) com checagem de hierarquia
+- **Advertências**: histórico persistente por servidor (`/avisar`, `/avisos`)
+- **Limpeza**: apagar mensagens em massa, com filtro por autor
+- **Canal**: modo lento, trancar/destrancar
+- **Auditoria**: toda ação registrada no canal de logs
+
+### 🎖️ Automação de Cargos
+- **Cargos por nível**: recompensa automática ao subir de nível (estilo MEE6)
+- **Autorole**: cargo concedido a quem entra no servidor
+- **Painéis de cargo**: botões de auto-atribuição que sobrevivem ao restart
+
 ### 🛠️ Administração
-- **Sistema de Boas-Vindas**: Mensagens automáticas para novos membros
-- **Logs de Moderação**: Rastreamento de mensagens editadas/apagadas
+- **Configuração por servidor**: canais de log, boas-vindas e level up
+- **Cache de configuração**: evita ida ao banco em cada mensagem
+- **Rate limit**: cooldown nos comandos de IA para não queimar cota da API
+- **Logs de Moderação**: mensagens editadas/apagadas, entradas e saídas
 - **API HTTP**: Controle remoto via endpoints REST
 - **Dashboard Streamlit**: Interface visual para operações
 
@@ -334,12 +351,24 @@ python microfone.py
 ### Música e Áudio
 | Comando | Descrição | Exemplo |
 |---------|-----------|---------|
-| `/play <busca>` | Toca música do YouTube | `/play lofi hip hop` |
-| `/stop` | Para a música | `/stop` |
+| `/play <busca>` | Toca ou enfileira (aceita playlist) | `/play lofi hip hop` |
+| `/fila [pagina]` | Mostra a fila de reprodução | `/fila 2` |
+| `/tocando` | Faixa atual com barra de progresso | `/tocando` |
+| `/pular` | Pula para a próxima faixa | `/pular` |
+| `/loop <modo>` | Repetir faixa ou fila | `/loop queue` |
+| `/embaralhar` | Embaralha a fila | `/embaralhar` |
+| `/remover <n>` | Remove uma faixa da fila | `/remover 3` |
+| `/mover <a> <b>` | Reordena a fila | `/mover 5 1` |
+| `/limparfila` | Esvazia a fila | `/limparfila` |
+| `/volume <0-150>` | Ajusta o volume | `/volume 80` |
+| `/pausar` · `/retomar` | Pausa e retoma | `/pausar` |
+| `/stop` | Para tudo e sai da call | `/stop` |
 | `/sfx <nome>` | Toca efeito sonoro | `/sfx alarme` |
 | `/diga <texto>` | Fala em voz alta (TTS) | `/diga Olá pessoal!` |
-| `/entrar` | Entra no seu canal de voz | `/entrar` |
-| `/sair` | Sai do canal de voz | `/sair` |
+| `/entrar` · `/sair` | Entra/sai do canal de voz | `/entrar` |
+
+> 🎧 **Controle da fila**: sozinho na call, qualquer um controla. Com mais gente,
+> só quem tem o cargo DJ ou permissão de "Gerenciar Canais" mexe na fila alheia.
 
 ### Inteligência Artificial
 | Comando | Descrição | Exemplo |
@@ -359,6 +388,9 @@ python microfone.py
 | `/ranking` | Top 10 do servidor | `/ranking` |
 | `/noticias` | Jornal do servidor (IA) | `/noticias` |
 
+> ⏳ Os comandos de IA têm cooldown por usuário (`/chat` 3×/min, demais 2×/min)
+> para não estourar a cota do Gemini.
+
 ### Utilidades
 | Comando | Descrição | Exemplo |
 |---------|-----------|---------|
@@ -369,10 +401,38 @@ python microfone.py
 | `/uptime` | Tempo online | `/uptime` |
 | `/parar` | Interrompe qualquer som | `/parar` |
 
-### Moderação (requer permissão "Gerenciar Servidor")
-| Comando | Descrição | Exemplo |
-|---------|-----------|---------|
-| `/setlog <canal>` | Define o canal de logs de moderação | `/setlog #logs` |
+### Moderação
+| Comando | Permissão | Descrição |
+|---------|-----------|-----------|
+| `/ban <membro>` | Banir Membros | Bane, com opção de apagar mensagens |
+| `/unban <id>` | Banir Membros | Remove um banimento pelo ID |
+| `/kick <membro>` | Expulsar Membros | Expulsa do servidor |
+| `/castigo <membro> <min>` | Moderar Membros | Timeout de até 28 dias |
+| `/descastigo <membro>` | Moderar Membros | Libera antes da hora |
+| `/avisar <membro>` | Moderar Membros | Registra uma advertência |
+| `/avisos [membro]` | — | Histórico de advertências |
+| `/removeraviso <id>` | Moderar Membros | Apaga uma advertência |
+| `/limparavisos <membro>` | Gerenciar Servidor | Zera o histórico |
+| `/limpar <n> [membro]` | Gerenciar Mensagens | Apaga mensagens em massa |
+| `/lento <seg>` | Gerenciar Canais | Modo lento |
+| `/trancar` · `/destrancar` | Gerenciar Canais | Fecha/abre o canal |
+
+Toda punição respeita a hierarquia de cargos, avisa o punido por DM e é
+registrada no canal de `/setlog`.
+
+### Cargos e Configuração
+| Comando | Permissão | Descrição |
+|---------|-----------|-----------|
+| `/nivelcargo definir <nivel> <cargo>` | Gerenciar Cargos | Recompensa por nível |
+| `/nivelcargo listar` · `remover` | Gerenciar Cargos | Gerencia as recompensas |
+| `/autorole [cargo]` | Gerenciar Cargos | Cargo automático ao entrar |
+| `/painelcargos <titulo> <cargos>` | Gerenciar Cargos | Painel com botões de cargo |
+| `/removerpainel <id>` | Gerenciar Cargos | Desativa um painel |
+| `/setlog [canal]` | Gerenciar Servidor | Canal de logs |
+| `/boasvindas [canal]` | Gerenciar Servidor | Canal de boas-vindas |
+| `/levelupcanal [canal]` | Gerenciar Servidor | Onde anunciar level ups |
+| `/xpcanal [canal]` | Gerenciar Servidor | Liga/desliga XP num canal |
+| `/xp <true\|false>` | Gerenciar Servidor | Liga/desliga a gamificação |
 
 > 🔐 Os logs de mensagens apagadas/editadas só são publicados **depois** de
 > configurar um canal com `/setlog`. Sem isso, o bot não republica nada —
@@ -412,11 +472,13 @@ clutch-discord-bot/
 ├── cogs/                   # Módulos do bot (Cogs)
 │   ├── api_controle.py    # API HTTP autenticada + MixerSource
 │   ├── audio.py           # TTS e reprodução de arquivos
+│   ├── cargos.py          # Cargos por nível, autorole, painéis
 │   ├── cerebro.py         # Chat IA + Personas
 │   ├── geral.py           # Comandos utilitários
 │   ├── iconico.py         # RPG, Vibe, Shipp (IA divertida)
+│   ├── moderacao.py       # Ban, kick, castigo, avisos, limpeza
 │   ├── monitoring.py      # Health checks (/status, /ping, /uptime)
-│   ├── musica.py          # YouTube player
+│   ├── musica.py          # Player com fila
 │   ├── porteiro.py        # Sistema de boas-vindas
 │   ├── presence_bridge.py # Ingestão de presença para o CLUTCH
 │   ├── social.py          # XP, Níveis, Perfis
@@ -428,7 +490,9 @@ clutch-discord-bot/
 ├── utils/
 │   ├── ai.py              # Cliente Gemini assíncrono
 │   ├── audio_mix.py       # Mixagem PCM (funções puras)
+│   ├── guild_config.py    # Cache de configuração por servidor
 │   ├── logger.py          # Logging rotacionado
+│   ├── musica_fila.py     # Fila de reprodução (funções puras)
 │   ├── presence_bridge.py # Cliente da bridge de presença
 │   └── soundboard.py      # Resolução segura de nomes de sons
 │
@@ -453,6 +517,26 @@ clutch-discord-bot/
 ├── .gitignore            
 └── README.md              # Este arquivo
 ```
+
+---
+
+## 🚀 Configuração Recomendada (primeiros 5 minutos)
+
+Depois de convidar o bot, rode estes comandos no servidor:
+
+```
+/setlog #logs-do-servidor        → liga os logs de moderação
+/boasvindas #geral               → mensagens de entrada
+/levelupcanal #conquistas        → anúncios de level up longe do chat
+/xpcanal #comandos-do-bot        → não dar XP em canal de spam
+/nivelcargo definir 5 @Ativo     → recompensa de cargo no nível 5
+/autorole @Membro                → cargo automático para quem entra
+/painelcargos "Escolha seus times" @Valorant @LoL @CS
+```
+
+> ⚠️ Para os cargos funcionarem, **o cargo do bot precisa estar acima** dos
+> cargos que ele vai conceder na lista de cargos do servidor. Os comandos
+> avisam quando isso não está certo.
 
 ---
 
@@ -486,6 +570,15 @@ Se a compilação falhar, instale antes a lib nativa `portaudio`
    `API_KEY` — defina a chave ou volte para `API_HOST=127.0.0.1`
 4. Erro 401 no dashboard: a `API_KEY` do dashboard não bate com a do bot
 5. Porta 8080 em uso: mude `API_PORT` no `.env`
+
+### O bot não concede os cargos por nível
+1. O cargo do bot precisa estar **acima** do cargo concedido
+2. O bot precisa da permissão "Gerenciar Cargos"
+3. Confira as recompensas com `/nivelcargo listar`
+
+### Os botões do painel de cargos pararam de funcionar
+Os painéis são restaurados no startup a partir do banco. Se o `data/clutch.db`
+foi apagado, crie o painel de novo com `/painelcargos`.
 
 ### `/sfx` não encontra nenhum som
 Coloque os arquivos `.mp3` em `assets/sfx/` (ou no diretório definido em

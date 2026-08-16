@@ -18,7 +18,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from infra.database import get_log_channel_id, set_log_channel_id
+from utils.guild_config import guild_config
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -48,14 +48,17 @@ class Vigia(commands.Cog):
         if guild is None:
             return None
 
-        channel_id = await get_log_channel_id(guild.id)
-        if not channel_id:
+        # Cache em memória: on_message_delete não pode fazer query por evento
+        config = await guild_config.obter(guild.id)
+        if not config.log_channel_id:
             return None
 
-        canal = guild.get_channel(channel_id)
+        canal = guild.get_channel(config.log_channel_id)
         if canal is None:
             logger.warning(
-                "Canal de log %s não existe mais no servidor %s", channel_id, guild.id
+                "Canal de log %s não existe mais no servidor %s",
+                config.log_channel_id,
+                guild.id,
             )
             return None
 
@@ -131,6 +134,69 @@ class Vigia(commands.Cog):
         except discord.HTTPException as e:
             logger.warning("Não foi possível enviar log de edição: %s", e)
 
+    @commands.Cog.listener()
+    async def on_member_join(self, member: discord.Member):
+        """Registra entradas de membros no canal de logs."""
+        canal_log = await self._canal_de_log(member.guild)
+        if canal_log is None:
+            return
+
+        embed = discord.Embed(
+            title="📥 Membro entrou",
+            color=discord.Color.green(),
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.set_author(
+            name=f"{member} ({member.id})", icon_url=member.display_avatar.url
+        )
+        embed.add_field(
+            name="Conta criada",
+            value=discord.utils.format_dt(member.created_at, "R"),
+            inline=True,
+        )
+        embed.add_field(
+            name="Total de membros", value=str(member.guild.member_count), inline=True
+        )
+
+        try:
+            await canal_log.send(embed=embed, allowed_mentions=SEM_MENCOES)
+        except discord.HTTPException as e:
+            logger.warning("Não foi possível registrar entrada: %s", e)
+
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member):
+        """Registra saídas de membros no canal de logs."""
+        canal_log = await self._canal_de_log(member.guild)
+        if canal_log is None:
+            return
+
+        cargos = [r.mention for r in member.roles if not r.is_default()]
+
+        embed = discord.Embed(
+            title="📤 Membro saiu",
+            color=discord.Color.dark_grey(),
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.set_author(
+            name=f"{member} ({member.id})", icon_url=member.display_avatar.url
+        )
+        if member.joined_at:
+            embed.add_field(
+                name="Entrou em",
+                value=discord.utils.format_dt(member.joined_at, "R"),
+                inline=True,
+            )
+        embed.add_field(
+            name="Cargos",
+            value=", ".join(cargos)[:1024] if cargos else "_nenhum_",
+            inline=False,
+        )
+
+        try:
+            await canal_log.send(embed=embed, allowed_mentions=SEM_MENCOES)
+        except discord.HTTPException as e:
+            logger.warning("Não foi possível registrar saída: %s", e)
+
     @app_commands.command(
         name="setlog", description="Define o canal de logs de moderação"
     )
@@ -144,7 +210,7 @@ class Vigia(commands.Cog):
     ):
         """Configura (ou desativa) o canal de logs de moderação."""
         if canal is None:
-            await set_log_channel_id(interaction.guild.id, None)
+            await guild_config.atualizar(interaction.guild.id, log_channel_id=None)
             return await interaction.response.send_message(
                 "🔕 Logs de moderação desativados.", ephemeral=True
             )
@@ -156,7 +222,7 @@ class Vigia(commands.Cog):
                 ephemeral=True,
             )
 
-        await set_log_channel_id(interaction.guild.id, canal.id)
+        await guild_config.atualizar(interaction.guild.id, log_channel_id=canal.id)
         await interaction.response.send_message(
             f"✅ Logs de moderação vão para {canal.mention}.", ephemeral=True
         )

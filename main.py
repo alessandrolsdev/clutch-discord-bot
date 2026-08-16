@@ -24,10 +24,12 @@ import random
 from pathlib import Path
 
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 
 from config.settings import settings
 from infra.database import inicializar_db
+from utils.guild_config import guild_config
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -61,6 +63,9 @@ class ClutchBot(commands.Bot):
             help_command=None,
         )
         self.status_loop.change_interval(seconds=settings.bot.status_rotation_seconds)
+        # Erros de slash command (cooldown, permissão) precisam de tratamento
+        # próprio: a árvore de app commands não usa on_command_error.
+        self.tree.on_error = self.on_app_command_error
 
     async def setup_hook(self):
         """
@@ -109,6 +114,51 @@ class ClutchBot(commands.Bot):
             self.user,
             len(self.guilds),
         )
+
+    async def on_app_command_error(
+        self,
+        interaction: discord.Interaction,
+        error: app_commands.AppCommandError,
+    ):
+        """
+        Trata erros de slash commands com mensagens amigáveis.
+
+        Sem isso, um cooldown ou falta de permissão vira um traceback no log e
+        um "aplicação não respondeu" para o usuário.
+        """
+        if isinstance(error, app_commands.CommandOnCooldown):
+            mensagem = (
+                f"⏳ Calma! Tente de novo em **{error.retry_after:.0f}s**."
+            )
+        elif isinstance(error, app_commands.MissingPermissions):
+            mensagem = "❌ Você não tem permissão para usar este comando."
+        elif isinstance(error, app_commands.BotMissingPermissions):
+            faltando = ", ".join(error.missing_permissions)
+            mensagem = f"❌ Faltam permissões para mim: `{faltando}`."
+        elif isinstance(error, app_commands.NoPrivateMessage):
+            mensagem = "❌ Este comando só funciona em servidores."
+        elif isinstance(error, app_commands.CheckFailure):
+            mensagem = "❌ Você não pode usar este comando aqui."
+        else:
+            logger.error(
+                "Erro no comando /%s: %s",
+                interaction.command.name if interaction.command else "?",
+                error,
+                exc_info=error,
+            )
+            mensagem = "❌ Deu ruim aqui. O erro foi registrado nos logs."
+
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(mensagem, ephemeral=True)
+            else:
+                await interaction.response.send_message(mensagem, ephemeral=True)
+        except discord.HTTPException:
+            logger.debug("Não foi possível responder ao erro da interação")
+
+    async def on_guild_remove(self, guild: discord.Guild):
+        """Libera o cache de configuração de servidores que removeram o bot."""
+        guild_config.invalidar(guild.id)
 
     async def on_command_error(self, ctx, error):
         """Evita que erros de comandos legados fiquem silenciosos."""

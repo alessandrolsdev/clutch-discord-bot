@@ -42,6 +42,7 @@ class Iconico(commands.Cog):
         )
         return False
 
+    @app_commands.checks.cooldown(2, 60.0, key=lambda i: i.user.id)
     @app_commands.command(name="rpg", description="Gera uma ficha de RPG zueira")
     @app_commands.describe(usuario="De quem é a ficha? (padrão: você)")
     async def rpg(
@@ -71,6 +72,7 @@ class Iconico(commands.Cog):
         embed.set_thumbnail(url=alvo.display_avatar.url)
         await interaction.followup.send(embed=embed)
 
+    @app_commands.checks.cooldown(2, 60.0, key=lambda i: i.user.id)
     @app_commands.command(name="vibe", description="Julga a vibe da call (com áudio!)")
     @app_commands.guild_only()
     async def vibe(self, interaction: discord.Interaction):
@@ -117,6 +119,7 @@ class Iconico(commands.Cog):
             except Exception as e:
                 logger.warning("Falha ao reproduzir TTS do /vibe: %s", e)
 
+    @app_commands.checks.cooldown(2, 60.0, key=lambda i: i.user.id)
     @app_commands.command(name="shipp", description="Analisa compatibilidade de casal")
     @app_commands.describe(
         pessoa1="Primeira pessoa", pessoa2="Segunda pessoa (padrão: você)"

@@ -80,6 +80,8 @@ class Cerebro(commands.Cog):
 
     @app_commands.command(name="chat", description="Conversa contínua com a IA")
     @app_commands.describe(mensagem="Sua mensagem para o bot")
+    # Rate limit por usuário: cada chamada custa cota do Gemini
+    @app_commands.checks.cooldown(3, 60.0, key=lambda i: i.user.id)
     async def chat(self, interaction: discord.Interaction, mensagem: str):
         """Conversa com a IA mantendo contexto recente."""
         if not gemini.is_enabled:
