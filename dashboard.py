@@ -562,6 +562,27 @@ AGENTES = {
 
 UDP_IP = os.getenv("UDP_TARGET_IP", "127.0.0.1")
 
+# Rótulos dos modos de repetição do player (espelham utils/musica_fila.LoopMode)
+ROTULOS_LOOP = {
+    "off": "➡️ Desligado",
+    "track": "🔂 Faixa",
+    "queue": "🔁 Fila",
+}
+
+
+def formatar_tempo(segundos: Optional[int]) -> str:
+    """Formata segundos como MM:SS (ou ──:── quando não há duração)."""
+    if not segundos or segundos < 0:
+        return "──:──"
+
+    segundos = int(segundos)
+    horas, resto = divmod(segundos, 3600)
+    minutos, segs = divmod(resto, 60)
+
+    if horas:
+        return f"{horas}:{minutos:02d}:{segs:02d}"
+    return f"{minutos}:{segs:02d}"
+
 
 # ============================================================================
 # PROCESSAMENTO DE ÁUDIO
@@ -792,6 +813,7 @@ bot_online = status is not None
 canal_atual = status.get("channel", "---") if status else "---"
 sons_disponiveis = status.get("sounds", []) if status else []
 membros = status.get("members", []) if status else []
+musica = status.get("music", {}) if status else {}
 
 with st.sidebar:
     status_class = "status-online" if bot_online else "status-offline"
@@ -856,8 +878,8 @@ with st.sidebar:
 # ÁREA PRINCIPAL
 # ============================================================================
 
-tab_effects, tab_soundboard, tab_status = st.tabs(
-    ["🎭 Efeitos de Voz", "🎵 Soundboard", "📊 Status"]
+tab_effects, tab_soundboard, tab_musica, tab_status = st.tabs(
+    ["🎭 Efeitos de Voz", "🔊 Soundboard", "🎵 Música", "📊 Status"]
 )
 
 with tab_effects:
@@ -938,6 +960,70 @@ with tab_soundboard:
                     if resultado:
                         st.toast(resultado.get("message", "Tocando"))
 
+with tab_musica:
+    st.markdown("### 🎵 Player de Música")
+
+    if not bot_online:
+        st.warning("Bot offline.")
+    elif not musica.get("current"):
+        st.info("Nada tocando. Use `/play` no Discord para começar.")
+    else:
+        atual = musica["current"]
+
+        col_capa, col_info = st.columns([1, 3])
+        with col_capa:
+            if atual.get("thumbnail"):
+                st.image(atual["thumbnail"], use_container_width=True)
+
+        with col_info:
+            titulo = atual["title"]
+            if atual.get("url"):
+                st.markdown(f"#### [{titulo}]({atual['url']})")
+            else:
+                st.markdown(f"#### {titulo}")
+
+            posicao = musica.get("position", 0)
+            duracao = atual.get("duration")
+
+            if duracao:
+                st.progress(min(posicao / duracao, 1.0))
+                st.caption(
+                    f"{formatar_tempo(posicao)} / {formatar_tempo(duracao)} • "
+                    f"Volume {musica.get('volume', 0)}% • "
+                    f"Repetição: {ROTULOS_LOOP.get(musica.get('loop'), '➡️')}"
+                )
+            else:
+                st.caption("🔴 AO VIVO")
+
+        col_skip, col_stop = st.columns(2)
+        with col_skip:
+            if st.button("⏭️ Pular", use_container_width=True):
+                resultado = api_post(agente, "/music/skip")
+                if resultado:
+                    st.toast(resultado.get("message", "Pulando"))
+                    st.rerun()
+        with col_stop:
+            if st.button("⏹️ Parar e sair", use_container_width=True):
+                resultado = api_post(agente, "/music/stop")
+                if resultado:
+                    st.toast(resultado.get("message", "Encerrado"))
+                    st.rerun()
+
+    fila = musica.get("queue", [])
+    total_fila = musica.get("queue_size", 0)
+
+    st.markdown(f"#### 📜 Na fila ({total_fila})")
+    if not fila:
+        st.caption("_Fila vazia._")
+    else:
+        for indice, item in enumerate(fila, start=1):
+            st.markdown(
+                f"`{indice}.` **{item['title']}** "
+                f"`{formatar_tempo(item.get('duration'))}`"
+            )
+        if total_fila > len(fila):
+            st.caption(f"… e mais {total_fila - len(fila)} faixas. Veja tudo com `/fila`.")
+
 with tab_status:
     st.markdown("### 📊 Status do Sistema")
 
@@ -946,7 +1032,7 @@ with tab_status:
         ("Bot Status", "ONLINE" if bot_online else "OFFLINE"),
         ("Efeito Atual", VOICE_EFFECTS[st.session_state.current_effect]["name"]),
         ("Microfone", "ON" if mic.is_running() else "OFF"),
-        ("Agente", agente),
+        ("Na fila", str(musica.get("queue_size", 0))),
     ]
 
     for coluna, (rotulo, valor) in zip(metric_cols, metricas):

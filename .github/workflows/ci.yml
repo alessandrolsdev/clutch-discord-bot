@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+# Um push novo cancela a execução anterior da mesma branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  testes:
+    name: Testes (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 é a versão da imagem Docker; 3.12 pega quebras de depreciação
+        python-version: ["3.11", "3.12"]
+
+    env:
+      # config/settings.py exige DISCORD_TOKEN no import
+      DISCORD_TOKEN: token-falso-para-ci
+      DB_PATH: /tmp/ci-clutch.db
+      LOG_LEVEL: CRITICAL
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyflakes
+
+      - name: Verificar sintaxe de todos os módulos
+        run: python -m compileall -q main.py cogs config infra utils dashboard.py start.py receptor.py microfone.py
+
+      - name: Lint (pyflakes)
+        # start.py importa pyaudio de propósito, só para checar a instalação
+        run: |
+          python -m pyflakes . \
+            | grep -v "'pyaudio' imported but unused" \
+            > pyflakes.txt || true
+          if [ -s pyflakes.txt ]; then
+            echo "❌ pyflakes encontrou problemas:"
+            cat pyflakes.txt
+            exit 1
+          fi
+          echo "✅ pyflakes limpo"
+
+      - name: Rodar testes
+        run: python -m unittest discover -s tests -t . -v
+
+  carregamento-dos-cogs:
+    name: Carregamento dos cogs
+    runs-on: ubuntu-latest
+
+    env:
+      DISCORD_TOKEN: token-falso-para-ci
+      DB_PATH: /tmp/ci-cogs.db
+      LOG_LEVEL: CRITICAL
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Carregar todos os cogs e checar comandos duplicados
+        # Pega o erro que já quebrou o bot uma vez: dois app commands com o
+        # mesmo nome fazem o discord.py recusar o carregamento de um cog.
+        run: python scripts/verificar_cogs.py
+
+  docker:
+    name: Build da imagem
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        # Só constrói: o pyaudio já quebrou este build antes
+        run: docker build -t clutch-bot:ci .

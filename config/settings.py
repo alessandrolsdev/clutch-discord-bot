@@ -75,6 +75,18 @@ class BotConfig:
         default_factory=lambda: int(get_env("STATUS_ROTATION_SECONDS", "60"))
     )
 
+    # ID do servidor de desenvolvimento. Quando definido, os slash commands
+    # são sincronizados só nele — propagação instantânea em vez de até 1h.
+    dev_guild_id: Optional[int] = field(
+        default_factory=lambda: get_optional_int_env("DEV_GUILD_ID")
+    )
+
+    # Sincronizar comandos automaticamente no boot. Desligue se estiver
+    # reiniciando com frequência (o sync global tem rate limit apertado).
+    auto_sync: bool = field(
+        default_factory=lambda: get_env("AUTO_SYNC", "true").lower() == "true"
+    )
+
     # Lista de status para rotação
     status_messages: list = field(
         default_factory=lambda: [
@@ -179,6 +191,17 @@ class DatabaseConfig:
 
     # Timeout de conexão (segundos)
     timeout: int = field(default_factory=lambda: int(get_env("DB_TIMEOUT", "10")))
+
+    # Diretório dos backups automáticos
+    backup_dir: str = field(default_factory=lambda: get_env("DB_BACKUP_DIR", "backups"))
+
+    # Backup automático diário
+    backup_enabled: bool = field(
+        default_factory=lambda: get_env("DB_BACKUP_ENABLED", "true").lower() == "true"
+    )
+
+    # Quantos backups manter (os mais antigos são apagados)
+    backup_keep: int = field(default_factory=lambda: int(get_env("DB_BACKUP_KEEP", "7")))
 
 
 @dataclass

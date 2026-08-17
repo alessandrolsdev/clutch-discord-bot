@@ -4,7 +4,8 @@
 
 Bot Discord avançado com **Inteligência Artificial**, **Sistema de Áudio em Tempo Real**, **Gamificação** e **Dashboard Web**.
 
-[![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![CI](https://github.com/alessandrolsdev/clutch-discord-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/alessandrolsdev/clutch-discord-bot/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Discord.py](https://img.shields.io/badge/discord.py-2.3+-blue.svg)](https://github.com/Rapptz/discord.py)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -420,6 +421,21 @@ python microfone.py
 Toda punição respeita a hierarquia de cargos, avisa o punido por DM e é
 registrada no canal de `/setlog`.
 
+### Comandos do Dono (prefixo `!`, só para o dono da aplicação)
+| Comando | Descrição |
+|---------|-----------|
+| `!sync` | Sincroniza os slash commands **neste servidor** (instantâneo) |
+| `!sync global` | Sincroniza em todos os servidores (leva até 1h) |
+| `!sync limpar` | Remove os comandos deste servidor |
+| `!reload <cog>` | Recarrega um cog sem reiniciar o bot |
+| `!cogs` | Lista os cogs carregados |
+| `!backup` · `!backups` | Gera e lista backups do banco |
+| `!cache [limpar]` | Estado do cache de configuração |
+| `!info` | Resumo operacional |
+
+> `!sync` é comando de prefixo de propósito: para usar um slash command ele
+> precisa já estar sincronizado, e é justamente isso que o comando resolve.
+
 ### Cargos e Configuração
 | Comando | Permissão | Descrição |
 |---------|-----------|-----------|
@@ -444,6 +460,7 @@ registrada no canal de `/setlog`.
 
 ### Funcionalidades
 
+- 🎵 **Player de Música**: Faixa atual, progresso, fila e botões de pular/parar
 - 🎙️ **Controle de Microfone**: Ativar/desativar transmissão
 - 🎭 **Modulador de Voz**: Alterar voz em tempo real
 - 🔊 **Soundboard**: Tocar efeitos sonoros remotamente
@@ -471,6 +488,7 @@ clutch-discord-bot/
 │
 ├── cogs/                   # Módulos do bot (Cogs)
 │   ├── api_controle.py    # API HTTP autenticada + MixerSource
+│   ├── admin.py           # !sync, !reload, !backup (dono do bot)
 │   ├── audio.py           # TTS e reprodução de arquivos
 │   ├── cargos.py          # Cargos por nível, autorole, painéis
 │   ├── cerebro.py         # Chat IA + Personas
@@ -497,7 +515,14 @@ clutch-discord-bot/
 │   └── soundboard.py      # Resolução segura de nomes de sons
 │
 ├── infra/
+│   ├── backup.py          # Backup consistente do SQLite
 │   └── database.py        # Gerenciador do SQLite
+│
+├── scripts/
+│   └── verificar_cogs.py  # Checa carregamento e nomes duplicados
+│
+├── .github/workflows/
+│   └── ci.yml             # Testes, lint e build da imagem
 │
 ├── tests/                 # Testes (python -m unittest discover -s tests -t .)
 │
@@ -589,6 +614,47 @@ Coloque os arquivos `.mp3` em `assets/sfx/` (ou no diretório definido em
 - Reduza `AUDIO_CHUNK_SIZE` no `.env` para menos latência
 - Verifique sua conexão de internet
 - Aumente `RECEPTOR_BUFFER_SIZE` no `.env` para mais estabilidade
+
+---
+
+## 🧪 Desenvolvimento
+
+### Rodando os testes
+```bash
+python -m unittest discover -s tests -t .     # 75 testes
+python scripts/verificar_cogs.py              # carrega os cogs, checa duplicados
+python -m pyflakes .                          # lint
+```
+
+O CI (`.github/workflows/ci.yml`) roda os três a cada push, em Python 3.11 e
+3.12, e ainda constrói a imagem Docker.
+
+### Sync rápido durante o desenvolvimento
+O sync global leva até uma hora para propagar. Para desenvolver, aponte o bot
+a um servidor de teste:
+
+```env
+DEV_GUILD_ID=123456789012345678
+AUTO_SYNC=true
+```
+
+Os comandos passam a aparecer instantaneamente. Em produção, deixe
+`DEV_GUILD_ID` vazio. Se estiver reiniciando muito, use `AUTO_SYNC=false` e
+rode `!sync` quando precisar — o sync global tem rate limit apertado.
+
+### Backups
+Backup diário automático em `backups/`, mantendo os 7 mais recentes. Use
+`!backup` para gerar na hora e `!backups` para listar.
+
+A cópia usa a API `backup()` do SQLite, não um `cp`: com WAL ligado, copiar só
+o arquivo `.db` durante uma escrita perde os dados mais recentes.
+
+Para restaurar (**com o bot parado**):
+```python
+python -c "from infra.backup import restaurar_backup; \
+  restaurar_backup('backups/clutch-backup-AAAAMMDD-HHMMSS.db', 'data/clutch.db')"
+```
+O banco atual é preservado como `data/clutch.db.antes-da-restauracao`.
 
 ---
 

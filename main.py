@@ -97,14 +97,40 @@ class ClutchBot(commands.Bot):
         logger.info("Cogs: %s carregados, %s com falha", carregados, falhas)
 
         # Sincroniza Slash Commands com o Discord
-        try:
-            comandos = await self.tree.sync()
-            logger.info("🌲 %s slash commands sincronizados", len(comandos))
-        except Exception as e:
-            logger.error("❌ Erro no sync de slash commands: %s", e, exc_info=True)
+        await self._sincronizar_comandos()
 
         # Inicia loop de status
         self.status_loop.start()
+
+    async def _sincronizar_comandos(self) -> None:
+        """
+        Sincroniza os slash commands.
+
+        Com DEV_GUILD_ID definido, sincroniza só naquele servidor: a
+        propagação é imediata, enquanto o sync global leva até uma hora.
+        Com AUTO_SYNC=false, nada é sincronizado no boot — use `!sync`
+        (o sync global tem rate limit apertado e não deve rodar a cada
+        reinício durante o desenvolvimento).
+        """
+        if not settings.bot.auto_sync:
+            logger.info("↩️  AUTO_SYNC desligado — use !sync quando precisar")
+            return
+
+        try:
+            if settings.bot.dev_guild_id:
+                guild = discord.Object(id=settings.bot.dev_guild_id)
+                self.tree.copy_global_to(guild=guild)
+                comandos = await self.tree.sync(guild=guild)
+                logger.info(
+                    "🌲 %s slash commands sincronizados no servidor de dev %s",
+                    len(comandos),
+                    settings.bot.dev_guild_id,
+                )
+            else:
+                comandos = await self.tree.sync()
+                logger.info("🌲 %s slash commands sincronizados globalmente", len(comandos))
+        except discord.HTTPException as e:
+            logger.error("❌ Erro no sync de slash commands: %s", e, exc_info=True)
 
     async def on_ready(self):
         """Evento disparado quando o bot conecta com sucesso ao Discord."""

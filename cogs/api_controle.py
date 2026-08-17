@@ -255,6 +255,64 @@ class APIControle(commands.Cog):
                 return web.json_response({"error": "unauthorized"}, status=401)
         return await handler(request)
 
+    def _estado_da_musica(self) -> Dict:
+        """
+        Resume o player de música para o dashboard.
+
+        Lê o cog Musica sem acoplar os dois: se ele não estiver carregado, a
+        API só devolve o bloco desligado.
+        """
+        vazio = {
+            "active": False,
+            "current": None,
+            "queue": [],
+            "queue_size": 0,
+            "loop": "off",
+            "volume": 0,
+            "position": 0,
+        }
+
+        musica_cog = self.bot.get_cog("Musica")
+        if not musica_cog or not self.bot.voice_clients:
+            return vazio
+
+        guild = self.bot.voice_clients[0].guild
+        player = musica_cog.players.get(guild.id)
+        if player is None:
+            return vazio
+
+        atual = player.fila.atual
+
+        return {
+            "active": player.tocando,
+            "current": (
+                {
+                    "title": atual.title,
+                    "duration": atual.duration,
+                    "url": atual.webpage_url,
+                    "thumbnail": atual.thumbnail,
+                }
+                if atual
+                else None
+            ),
+            # Só os 10 primeiros: o dashboard não precisa da fila inteira
+            "queue": [
+                {"title": t.title, "duration": t.duration}
+                for t in list(player.fila.itens)[:10]
+            ],
+            "queue_size": len(player.fila),
+            "loop": player.fila.loop.value,
+            "volume": int(player.volume * 100),
+            "position": player.posicao_atual,
+        }
+
+    def _player_ativo(self):
+        """Retorna o GuildPlayer do canal conectado, se houver."""
+        musica_cog = self.bot.get_cog("Musica")
+        if not musica_cog or not self.bot.voice_clients:
+            return None
+        return musica_cog.players.get(self.bot.voice_clients[0].guild.id)
+
     # --- ENDPOINTS DA API (HTTP) ---
 
     async def handle_status(self, request: web.Request) -> web.Response:
@@ -328,6 +386,7 @@ class APIControle(commands.Cog):
                 "members": members_data,
                 "volumes": volumes,
                 "sounds": listar_sons(SOUNDS_DIR),
+                "music": self._estado_da_musica(),
             }
         )
 
@@ -505,6 +564,28 @@ class APIControle(commands.Cog):
             {"msg": "Volume OK", "mic": self.mixer.vol_mic, "fx": self.mixer.vol_fx}
         )
 
+    async def handle_music_skip(self, request: web.Request) -> web.Response:
+        """POST /music/skip - Pula a faixa atual."""
+        player = self._player_ativo()
+        if player is None or not player.tocando:
+            return web.json_response({"message": "Nada tocando."}, status=409)
+
+        atual = player.fila.atual
+        # stop() dispara o callback `after`, que avança a fila
+        player.voice_client.stop()
+        return web.json_response(
+            {"message": f"Pulei: {atual.title if atual else 'faixa'}"}
+        )
+
+    async def handle_music_stop(self, request: web.Request) -> web.Response:
+        """POST /music/stop - Para a música e limpa a fila."""
+        player = self._player_ativo()
+        if player is None:
+            return web.json_response({"message": "Nada tocando."}, status=409)
+
+        await player.desconectar()
+        return web.json_response({"message": "Player encerrado."})
+
     async def start_server(self) -> None:
         """
         Inicia o servidor HTTP.
@@ -536,6 +617,8 @@ class APIControle(commands.Cog):
         app.router.add_post("/play", self.handle_play)
         app.router.add_post("/command", self.handle_command)
         app.router.add_post("/volume", self.handle_volume)
+        app.router.add_post("/music/skip", self.handle_music_skip)
+        app.router.add_post("/music/stop", self.handle_music_stop)
 
         self.runner = web.AppRunner(app)
         await self.runner.setup()

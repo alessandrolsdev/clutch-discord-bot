@@ -38,6 +38,10 @@ temp/
 *.log
 logs/
 
+# Backups do banco
+backups/
+*.antes-da-restauracao
+
 # Sistema operacional
 .DS_Store
 Thumbs.db
