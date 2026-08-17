@@ -21,8 +21,11 @@ from typing import Dict, Optional
 from infra.database import (
     carregar_guild_config,
     listar_canais_ignorados,
+    listar_isentos,
+    listar_palavras_proibidas,
     salvar_guild_config,
 )
+from utils.automod import RegrasAutomod
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -44,9 +47,26 @@ class GuildConfig:
     music_max_queue: int = 100
     xp_ignored_channels: frozenset = frozenset()
 
+    # Automod
+    automod: RegrasAutomod = RegrasAutomod()
+    automod_canais_isentos: frozenset = frozenset()
+    automod_cargos_isentos: frozenset = frozenset()
+
     def da_xp_no_canal(self, channel_id: int) -> bool:
         """True se mensagens neste canal devem conceder XP."""
         return self.xp_enabled and channel_id not in self.xp_ignored_channels
+
+    def automod_isento(self, channel_id: int, cargos_do_autor) -> bool:
+        """
+        True se a mensagem deve escapar do automod.
+
+        Args:
+            channel_id: Canal onde a mensagem foi enviada
+            cargos_do_autor: IDs dos cargos do autor
+        """
+        if channel_id in self.automod_canais_isentos:
+            return True
+        return bool(self.automod_cargos_isentos.intersection(cargos_do_autor))
 
 
 def _para_bool(valor, padrao: bool = True) -> bool:
@@ -54,6 +74,11 @@ def _para_bool(valor, padrao: bool = True) -> bool:
     if valor is None:
         return padrao
     return bool(valor)
+
+
+def _int_ou(valor, padrao: int) -> int:
+    """Converte para int, caindo no padrão quando a coluna é NULL."""
+    return padrao if valor is None else int(valor)
 
 
 class GuildConfigCache:
@@ -78,6 +103,8 @@ class GuildConfigCache:
 
         dados = await carregar_guild_config(guild_id)
         ignorados = await listar_canais_ignorados(guild_id)
+        palavras = await listar_palavras_proibidas(guild_id)
+        isentos = await listar_isentos(guild_id)
 
         config = GuildConfig(
             guild_id=guild_id,
@@ -91,6 +118,21 @@ class GuildConfigCache:
             dj_role_id=dados.get("dj_role_id"),
             music_max_queue=dados.get("music_max_queue") or 100,
             xp_ignored_channels=frozenset(ignorados),
+            automod=RegrasAutomod(
+                ativo=_para_bool(dados.get("automod_ativo"), padrao=False),
+                spam_mensagens=_int_ou(dados.get("automod_spam_mensagens"), 5),
+                spam_janela_segundos=_int_ou(dados.get("automod_spam_janela"), 5),
+                flood_repeticoes=_int_ou(dados.get("automod_flood"), 3),
+                bloquear_convites=_para_bool(dados.get("automod_convites")),
+                bloquear_links=_para_bool(dados.get("automod_links"), padrao=False),
+                max_mencoes=_int_ou(dados.get("automod_mencoes"), 5),
+                caps_percentual=_int_ou(dados.get("automod_caps"), 70),
+                castigo_minutos=_int_ou(dados.get("automod_castigo_minutos"), 10),
+                avisos_para_castigo=_int_ou(dados.get("automod_avisos_castigo"), 3),
+                palavras_proibidas=tuple(palavras),
+            ),
+            automod_canais_isentos=frozenset(isentos["canal"]),
+            automod_cargos_isentos=frozenset(isentos["cargo"]),
         )
 
         self._cache[guild_id] = config

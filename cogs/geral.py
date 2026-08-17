@@ -70,7 +70,13 @@ CATEGORIAS = {
             "`/avisar` · `/avisos` · `/removeraviso` · `/limparavisos`\n"
             "`/limpar <n>` - Apaga mensagens em massa\n"
             "`/lento <seg>` - Modo lento do canal\n"
-            "`/trancar` · `/destrancar` - Fecha/abre o canal\n"
+            "`/trancar` · `/destrancar` - Fecha/abre o canal\n\n"
+            "**Automod**\n"
+            "`/automod ativar` - Liga/desliga a moderação automática\n"
+            "`/automod regras` - Ajusta spam, links, CAPS, menções\n"
+            "`/automod palavra` - Lista de palavras proibidas\n"
+            "`/automod isentar` - Isenta canal ou cargo\n"
+            "`/automod ver` - Configuração atual\n"
             "_Requer as permissões correspondentes._"
         ),
     },

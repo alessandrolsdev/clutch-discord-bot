@@ -12,6 +12,7 @@ Esquema do Banco:
 - warns: Histórico de advertências de moderação
 - xp_ignored_channels: Canais que não concedem XP
 - button_roles / button_role_items: Painéis de auto-atribuição de cargos
+- automod_palavras / automod_isentos: Filtro de palavras e isenções do automod
 
 Todas as operações são assíncronas para não bloquear o bot.
 Toda conexão obtida por ``get_conexao`` já vem com ``row_factory`` configurado,
@@ -81,6 +82,17 @@ GUILD_CONFIG_COLUNAS: Dict[str, str] = {
     "autorole_id": "INTEGER",  # Cargo concedido ao entrar no servidor
     "dj_role_id": "INTEGER",  # Cargo que pode controlar a música dos outros
     "music_max_queue": "INTEGER NOT NULL DEFAULT 100",
+    # --- Automod (0 desliga a regra correspondente) ---
+    "automod_ativo": "INTEGER NOT NULL DEFAULT 0",
+    "automod_spam_mensagens": "INTEGER NOT NULL DEFAULT 5",
+    "automod_spam_janela": "INTEGER NOT NULL DEFAULT 5",
+    "automod_flood": "INTEGER NOT NULL DEFAULT 3",
+    "automod_convites": "INTEGER NOT NULL DEFAULT 1",
+    "automod_links": "INTEGER NOT NULL DEFAULT 0",
+    "automod_mencoes": "INTEGER NOT NULL DEFAULT 5",
+    "automod_caps": "INTEGER NOT NULL DEFAULT 70",
+    "automod_castigo_minutos": "INTEGER NOT NULL DEFAULT 10",
+    "automod_avisos_castigo": "INTEGER NOT NULL DEFAULT 3",
 }
 
 # Cargos automáticos por nível
@@ -114,6 +126,25 @@ CREATE TABLE IF NOT EXISTS xp_ignored_channels (
 )
 """
 
+# Palavras proibidas por servidor
+CREATE_AUTOMOD_PALAVRAS_TABLE = """
+CREATE TABLE IF NOT EXISTS automod_palavras (
+    guild_id INTEGER NOT NULL,
+    palavra TEXT NOT NULL,
+    PRIMARY KEY (guild_id, palavra)
+)
+"""
+
+# Canais e cargos isentos do automod
+CREATE_AUTOMOD_ISENTOS_TABLE = """
+CREATE TABLE IF NOT EXISTS automod_isentos (
+    guild_id INTEGER NOT NULL,
+    alvo_id INTEGER NOT NULL,
+    tipo TEXT NOT NULL CHECK (tipo IN ('canal', 'cargo')),
+    PRIMARY KEY (guild_id, alvo_id, tipo)
+)
+"""
+
 # Painéis de auto-atribuição de cargo (botões persistentes)
 CREATE_BUTTON_ROLES_TABLE = """
 CREATE TABLE IF NOT EXISTS button_roles (
@@ -141,6 +172,7 @@ INDICES = (
     "CREATE INDEX IF NOT EXISTS idx_usuarios_ranking ON usuarios(level DESC, xp DESC)",
     "CREATE INDEX IF NOT EXISTS idx_warns_user ON warns(guild_id, user_id)",
     "CREATE INDEX IF NOT EXISTS idx_level_roles_guild ON level_roles(guild_id, level)",
+    "CREATE INDEX IF NOT EXISTS idx_automod_isentos ON automod_isentos(guild_id)",
 )
 
 TABELAS = (
@@ -152,6 +184,8 @@ TABELAS = (
     CREATE_XP_IGNORED_TABLE,
     CREATE_BUTTON_ROLES_TABLE,
     CREATE_BUTTON_ROLE_ITEMS_TABLE,
+    CREATE_AUTOMOD_PALAVRAS_TABLE,
+    CREATE_AUTOMOD_ISENTOS_TABLE,
 )
 
 
@@ -514,3 +548,100 @@ async def remover_painel_cargos(message_id: int) -> bool:
         )
         await db.commit()
         return cursor.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# AUTOMOD
+# ---------------------------------------------------------------------------
+
+
+async def listar_palavras_proibidas(guild_id: int) -> List[str]:
+    """Retorna as palavras proibidas do servidor."""
+    async with get_conexao() as db:
+        async with db.execute(
+            "SELECT palavra FROM automod_palavras WHERE guild_id = ? ORDER BY palavra",
+            (guild_id,),
+        ) as cursor:
+            return [linha["palavra"] for linha in await cursor.fetchall()]
+
+
+async def adicionar_palavra_proibida(guild_id: int, palavra: str) -> bool:
+    """
+    Adiciona uma palavra à lista.
+
+    Returns:
+        False se a palavra já estava na lista
+    """
+    palavra = palavra.strip().casefold()
+    if not palavra:
+        return False
+
+    async with get_conexao() as db:
+        cursor = await db.execute(
+            "INSERT OR IGNORE INTO automod_palavras (guild_id, palavra) VALUES (?, ?)",
+            (guild_id, palavra),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def remover_palavra_proibida(guild_id: int, palavra: str) -> bool:
+    """Remove uma palavra da lista. Retorna True se existia."""
+    async with get_conexao() as db:
+        cursor = await db.execute(
+            "DELETE FROM automod_palavras WHERE guild_id = ? AND palavra = ?",
+            (guild_id, palavra.strip().casefold()),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def listar_isentos(guild_id: int) -> Dict[str, List[int]]:
+    """
+    Retorna canais e cargos isentos do automod.
+
+    Returns:
+        {"canal": [...], "cargo": [...]}
+    """
+    resultado: Dict[str, List[int]] = {"canal": [], "cargo": []}
+
+    async with get_conexao() as db:
+        async with db.execute(
+            "SELECT alvo_id, tipo FROM automod_isentos WHERE guild_id = ?", (guild_id,)
+        ) as cursor:
+            for linha in await cursor.fetchall():
+                resultado[linha["tipo"]].append(linha["alvo_id"])
+
+    return resultado
+
+
+async def alternar_isento(guild_id: int, alvo_id: int, tipo: str) -> bool:
+    """
+    Liga/desliga a isenção de um canal ou cargo.
+
+    Args:
+        guild_id: Servidor
+        alvo_id: ID do canal ou cargo
+        tipo: "canal" ou "cargo"
+
+    Returns:
+        True se passou a ser isento, False se deixou de ser
+    """
+    if tipo not in ("canal", "cargo"):
+        raise ValueError(f"tipo inválido: {tipo}")
+
+    async with get_conexao() as db:
+        cursor = await db.execute(
+            "DELETE FROM automod_isentos WHERE guild_id = ? AND alvo_id = ? AND tipo = ?",
+            (guild_id, alvo_id, tipo),
+        )
+        if cursor.rowcount:
+            await db.commit()
+            return False
+
+        await db.execute(
+            "INSERT INTO automod_isentos (guild_id, alvo_id, tipo) VALUES (?, ?, ?)",
+            (guild_id, alvo_id, tipo),
+        )
+        await db.commit()
+        return True

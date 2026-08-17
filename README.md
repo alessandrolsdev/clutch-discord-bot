@@ -56,6 +56,8 @@ Bot Discord avançado com **Inteligência Artificial**, **Sistema de Áudio em T
 - **Leaderboard**: Ranking automático de membros
 
 ### 🛡️ Moderação
+- **Automod**: anti-spam, anti-flood, convites, links, menções em massa,
+  CAPS e palavras proibidas — com punição escalonada
 - **Punições**: ban, kick, castigo (timeout) com checagem de hierarquia
 - **Advertências**: histórico persistente por servidor (`/avisar`, `/avisos`)
 - **Limpeza**: apagar mensagens em massa, com filtro por autor
@@ -421,6 +423,31 @@ python microfone.py
 Toda punição respeita a hierarquia de cargos, avisa o punido por DM e é
 registrada no canal de `/setlog`.
 
+### Automod
+| Comando | Descrição |
+|---------|-----------|
+| `/automod ativar <true\|false>` | Liga ou desliga a moderação automática |
+| `/automod ver` | Mostra todas as regras e isenções |
+| `/automod regras` | Ajusta spam, flood, links, menções, CAPS, castigo |
+| `/automod palavra <ação>` | Adiciona, remove ou lista palavras proibidas |
+| `/automod isentar <canal\|cargo>` | Isenta um canal ou cargo |
+
+**Como funciona a punição escalonada:**
+1. A mensagem é apagada e o autor recebe um aviso que some em 8 segundos
+2. Uma advertência entra no mesmo histórico do `/avisar`
+3. A cada N advertências (padrão 3), o autor leva castigo automático
+
+**Padrões:** 5 mensagens em 5s, 3 repetições iguais, convites bloqueados,
+5 menções por mensagem, 70% de CAPS. Qualquer limite em `0` desliga a regra.
+Links comuns são **permitidos** por padrão.
+
+> 🛡️ Quem tem "Gerenciar Mensagens" nunca é pego pelo automod. Para o resto,
+> use `/automod isentar` com o canal ou cargo.
+
+Detalhes que evitam falso positivo: `assado` não dispara pela palavra `ass`
+(a comparação é por palavra inteira), acentos são normalizados (`IDIÔTA` bate
+com `idiota`), e URLs/menções saem da conta de CAPS antes da medição.
+
 ### Comandos do Dono (prefixo `!`, só para o dono da aplicação)
 | Comando | Descrição |
 |---------|-----------|
@@ -488,6 +515,7 @@ clutch-discord-bot/
 │
 ├── cogs/                   # Módulos do bot (Cogs)
 │   ├── api_controle.py    # API HTTP autenticada + MixerSource
+│   ├── automod.py         # Moderação automática de mensagens
 │   ├── admin.py           # !sync, !reload, !backup (dono do bot)
 │   ├── audio.py           # TTS e reprodução de arquivos
 │   ├── cargos.py          # Cargos por nível, autorole, painéis
@@ -508,6 +536,7 @@ clutch-discord-bot/
 ├── utils/
 │   ├── ai.py              # Cliente Gemini assíncrono
 │   ├── audio_mix.py       # Mixagem PCM (funções puras)
+│   ├── automod.py         # Regras de automod (funções puras)
 │   ├── guild_config.py    # Cache de configuração por servidor
 │   ├── logger.py          # Logging rotacionado
 │   ├── musica_fila.py     # Fila de reprodução (funções puras)
@@ -557,6 +586,8 @@ Depois de convidar o bot, rode estes comandos no servidor:
 /nivelcargo definir 5 @Ativo     → recompensa de cargo no nível 5
 /autorole @Membro                → cargo automático para quem entra
 /painelcargos "Escolha seus times" @Valorant @LoL @CS
+/automod ativar true             → moderação automática
+/automod isentar #divulgacao     → libera links num canal só
 ```
 
 > ⚠️ Para os cargos funcionarem, **o cargo do bot precisa estar acima** dos
@@ -621,7 +652,7 @@ Coloque os arquivos `.mp3` em `assets/sfx/` (ou no diretório definido em
 
 ### Rodando os testes
 ```bash
-python -m unittest discover -s tests -t .     # 75 testes
+python -m unittest discover -s tests -t .     # 108 testes
 python scripts/verificar_cogs.py              # carrega os cogs, checa duplicados
 python -m pyflakes .                          # lint
 ```
